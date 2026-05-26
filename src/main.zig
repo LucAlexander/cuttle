@@ -2,6 +2,8 @@ const std = @import("std");
 const Buffer = std.ArrayList;
 const Map = std.StringHashMap;
 
+const ERROR_MAX = 128;
+
 const TOKEN = u64;
 
 const HOLE = '_';
@@ -41,6 +43,34 @@ const IDEN = 19;
 const Token = struct{
 	text: []const u8,
 	tag: TOKEN
+};
+
+const Error = struct {
+	pos: u64,
+	message: []u8
+};
+
+const ErrorLog = struct {
+	mem: *const std.mem.Allocator,
+	log: Buffer(Error)
+	
+	pub fn init(mem: *const std.mem.Allocator) ErrorLog {
+		return ErrorLog{
+			.mem = mem,
+			.log = Buffer(Error).init(mem.*)
+		};
+	}
+
+	pub fn append(self: *ErrorLog, index:u64, comptime fmt: []const u8, args: anytype) void {
+		var err = Error{
+			.post = index,
+			.message = self.mem.alloc(u8, ERROR_MAX) catch unreachable;
+		};
+		const result = std.fmt.bufPrint(err.message, fmt, args) catch unreachable;
+		err.message.len = result.len;
+		log.append(err) catch unreachable;
+
+	}
 };
 
 pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
@@ -92,11 +122,39 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 					continue;
 				}
 				_ = std.fmt.parseInt(i64, text[i..k], 10) catch {
-					
+					_ = std.fmt.parseInt(u64, text[i..k], 10) catch {
+						_ = std.fmt.parseFloat(f64, text[i..k], 10) catch {
+							tokens.append(Token{
+								.text = text[i..k],
+								.tag = IDEN
+							}) catch unreachable;
+							i = k;
+							continue;
+						}
+						tokens.append(Token{
+							.text = text[i..k],
+							.tag = FLOAT 
+						}) catch unreachable;
+						i = k;
+						continue;
+					};
+					tokens.append(Token{
+						.text = text[i..k],
+						.tag = NAT
+					}) catch unreachable;
+					i = k;
+					continue;
 				};
+				tokens.append(Token{
+					.text = text[i..k],
+					.tag = INT
+				}) catch unreachable;
+				i = k;
+				continue;
 			}
 		}
 	}
+	return tokens;
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -140,4 +198,6 @@ pub fn main() anyerror!void {
 	const outfile = args[2];
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
+	var err = ErrorLog.init(&main_mem);
+
 }
