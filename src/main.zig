@@ -157,6 +157,28 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	return tokens;
 }
 
+const AST = struct {
+	defs: Map(Definition),
+	macros: Map(Definition),
+	universes: Map(Map(Definition))
+};
+
+const Definition = struct {
+	name: Token,
+	args: Expr,
+	expression: Expr
+};
+
+const Expr = union(enum){
+	expr: Buffer(*Expr),
+	atom: Token,
+	quote: *Expr
+};
+
+pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) AST {
+	
+}
+
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
 	var infile = std.fs.cwd().openFile(filename, .{}) catch |err| {
 		std.debug.print("File not found: {s}\n", .{filename});
@@ -199,5 +221,5 @@ pub fn main() anyerror!void {
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
 	var err = ErrorLog.init(&main_mem);
-
+	var ast = parse(&main_mem, tokens.items, &err);
 }
