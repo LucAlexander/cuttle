@@ -26,7 +26,7 @@ const CUT = 3;
 const HEAD = 4;
 const PROG = 5;
 const IF = 6;
-const INPUT = 7;
+const IDEN = 7;
 const FLOAT = 8;
 const TAIL = 9;
 const LET = 10;
@@ -38,7 +38,6 @@ const LE = 15;
 const GE = 16;
 const EQ = 17;
 const NE = 18;
-const IDEN = 19;
 
 const Token = struct{
 	text: []const u8,
@@ -69,7 +68,10 @@ const ErrorLog = struct {
 		const result = std.fmt.bufPrint(err.message, fmt, args) catch unreachable;
 		err.message.len = result.len;
 		log.append(err) catch unreachable;
+	}
 
+	pub fn handle(self: *ErrorLog) void {
+		//TODO
 	}
 };
 
@@ -84,7 +86,6 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put("head", HEAD ) catch unreachable;
 	tokmap.put("prog", PROG ) catch unreachable;
 	tokmap.put("if", IF ) catch unreachable;
-	tokmap.put("input", INPUT ) catch unreachable;
 	tokmap.put("tail", TAIL ) catch unreachable;
 	tokmap.put("let", LET ) catch unreachable;
 	tokmap.put("set", SET ) catch unreachable;
@@ -158,6 +159,8 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 }
 
 const AST = struct {
+	mem: *const std.mem.Allocator,
+	let: Map(Expr),
 	defs: Map(Definition),
 	macros: Map(Definition),
 	universes: Map(Map(Definition))
@@ -175,8 +178,139 @@ const Expr = union(enum){
 	quote: *Expr
 };
 
-pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) AST {
-	
+const ParseError = error {
+	UnexpectedToken
+}
+
+pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
+	var ast = AST{
+		.mem = mem,
+		.let = Map(Expr).init(mem.*),
+		.defs = Map(Definition).init(mem.*),
+		.macros = Map(Definition).init(mem.*),
+		.universes = Map(Map(Definition)).init(mem.*)
+	};
+	var i: u64 = 0;
+	while (i<tokens.len){
+		if (tokens[i].tag == LET){
+			try parse_let(&ast, &i, tokens, err);
+		}
+		else if (tokens[i].tag == DEF){
+			try parse_def(&ast, &i, tokens, err);
+		}
+		else if (tokens[i].tag == MACRO){
+			try parse_macro(&ast, &i, tokens, err);
+		}
+		else if (tokens[i].tag == UNIVERSE){
+			try parse_universe(&ast, &i, tokens, err);
+		}
+		else {
+			if (ast.universes.getPtr(tokens[i].tag)) |universe| {
+				try parse_universe_def(&ast, &i, tokens, tokens[i], universe, err);
+			}
+		}
+		else {
+			err.append(i, "Unexpected token at top level {s}\n", .{tokens[i].text});
+		}
+	}
+	return ast;
+}
+
+pub fn parse_let(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (ast.let.get(tokens[i].text)) |_| {
+		err.append(i.*, "Duplicate global let definition {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	const name = tokens[i];
+	i.* += 1;
+	const expr = try parse_expr(ast, i, tokens, err);
+	ast.let.put(name.text, expr) catch unreachable;
+}
+
+pub fn parse_def(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of definition, found {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (ast.def.get(tokens[i].text)) |_| {
+		err.append(i.*, "Duplicate definition {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	const name = tokens[i];
+	i.* += 1;
+	const args = try parse_expr(ast, i, tokens, err);
+	const expression = try parse_expr(ast, i, token, err);
+	ast.defs.put(Definition{
+		.name = name,
+		.args = args,
+		.expression = expression
+	}) catch unreachable;
+}
+
+pub fn parse_macro(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of macro, found {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (ast.macros.get(tokens[i].text)) |_| {
+		err.append(i.*, "Duplicate macro {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	const name = tokens[i];
+	i.* += 1;
+	const args = try parse_expr(ast, i, tokens, err);
+	const expression = try parse_expr(ast, i, token, err);
+	ast.macros.put(Definition{
+		.name = name,
+		.args = args,
+		.expression = expression
+	}) catch unreachable;
+}
+
+pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (ast.universes.get(tokens[i].text)) |_| {
+		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i].text})
+		return ParseError.UnexpectedToken;
+	}
+	ast.universes.put(tokens[i].text, Map(Definition).init(ast.mem.*)) catch unreachable;
+	i.* += 1;
+}
+
+pub fn parse_universe_def(ast: *AST, i: *u64, tokens: []Token, name: Token, universe: *Map(Definition), err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of {s}, found {s}\n", .{name.text, tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (universe.get(tokens[i].text)) |_| {
+		err.append(i.*, "Duplicate {s} {s}\n", .{name.text, tokens[i].text});
+		return ParseError.UnexpectedToken;
+	}
+	const name = tokens[i];
+	i.* += 1;
+	const args = try parse_expr(ast, i, tokens, err);
+	const expression = try parse_expr(ast, i, token, err);
+	universe.put(Definition{
+		.name = name,
+		.args = args,
+		.expression = expression
+	}) catch unreachable;
+}
+
+pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!Expr {
+	//TODO
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -221,5 +355,7 @@ pub fn main() anyerror!void {
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
 	var err = ErrorLog.init(&main_mem);
-	var ast = parse(&main_mem, tokens.items, &err);
+	var ast = parse(&main_mem, tokens.items, &err) catch {
+		err.handle();
+	};
 }
