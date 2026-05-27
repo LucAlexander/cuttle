@@ -19,6 +19,8 @@ const OR = '|';
 const XOR = '^';
 const LT = '<';
 const GT = '>';
+const OPEN = '(';
+const CLOSE = ')';
 const DEFINE = 0;
 const MACRO = 1;
 const UNIVERSE = 2;
@@ -101,7 +103,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				i += 1;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT => {
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
 				tokens.append(Token{
 					.text = text[i..i+1],
 					.tag = c
@@ -310,7 +312,239 @@ pub fn parse_universe_def(ast: *AST, i: *u64, tokens: []Token, name: Token, univ
 }
 
 pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!Expr {
-	//TODO
+	const head = tokens[i];
+	if (head.tag == QUOTE){
+		i.* += 1;
+		if (head.tag == OPEN){
+			i.* += 1;
+			const inner = try parse_sub_expression_until(ast, i, tokens, err);
+			const outer = Expr{
+				.quote = ast.mem.create(Expr) catch unreachable
+			};
+			outer.quote.* = inner;
+			return outer;
+		}
+		const inner = Expr{
+			.atom = head
+		};
+		return inner;
+	}
+	if (head.tag == OPEN){
+		i.* += 1;
+		return try parse_sub_expression_until(ast, i, tokens, err);
+	}
+	switch (head.tag){ //TODO
+		PROG => {},
+		IF => {},
+		LAMBDA => {},
+		LET => {},
+		SET => {},
+		LE => {},
+		LT => {},
+		GE => {},
+		GT => {},
+		EQ => {},
+		NE => {},
+		ADD => {},
+		SUB => {},
+		MUL => {},
+		DIV => {},
+		MOD => {},
+		AND => {},
+		OR => {},
+		XOR => {},
+		UNQUOTE => {},
+		else => {}
+	}
+	else if (ast.defs.get(head.text)) |def| {
+		if (def.args == .expr){
+			const arity = def.args.expr.items.len;
+			return try parse_sub_expression_arity(ast, i, tokens, err, arity);
+		}
+		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+		return ParseError.UnexpectedToken;
+	}
+	else if (ast.macros.get(head.text)) |def| {
+		if (def.args == .expr){
+			const arity = def.args.expr.items.len;
+			return try parse_sub_expression_arity(ast, i, tokens, err, arity);
+		}
+		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+		return ParseError.UnexpectedToken;
+	}
+	else if (ast.let.get(head.text)) |let| {
+		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+		return ParseError.UnexpectedToken;
+	}
+	//TODO may be a future definition
+}
+
+pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog, arity: u64) ParseError!Expr {
+	const expr = Expr{
+		.expr = Buffer(*Expr).init(ast.mem.*)
+	};
+	while (expr.expr.items.len < arity+1){
+		const head = tokens[i];
+		if (head.tag == QUOTE){
+			i.* += 1;
+			if (head.tag == OPEN){
+				i.* += 1;
+				const inner = try parse_sub_expression_until(ast, i, tokens, err);
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = Expr{
+					.quote = ast.mem.create(Expr) catch unreachable
+				};
+				outer.quote.* = inner;
+				expr.expr.append(outer) catch unreachable;
+			}
+			const outer = ast.mem.create(Expr) catch unreachable;
+			outer.* = Expr{
+				.atom = head
+			};
+			expr.expr.append(outer) catch unreachable;
+		}
+		if (head.tag == OPEN){
+			i.* += 1;
+			expr.expr.append(try parse_sub_expression_until(ast, i, tokens, err)) catch unreachable;
+		}
+		switch (head.tag){ //TODO
+			PROG => {},
+			IF => {},
+			LAMBDA => {},
+			LET => {},
+			SET => {},
+			LE => {},
+			LT => {},
+			GE => {},
+			GT => {},
+			EQ => {},
+			NE => {},
+			ADD => {},
+			SUB => {},
+			MUL => {},
+			DIV => {},
+			MOD => {},
+			AND => {},
+			OR => {},
+			XOR => {},
+			UNQUOTE => {},
+			else => {}
+		}
+		else if (ast.defs.get(head.text)) |def| {
+			if (def.args == .expr){
+				const arity = def.args.expr.items.len;
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				expr.expr.append(outer) catch unreachable;
+			}
+			else {
+				err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+				return ParseError.UnexpectedToken;
+			}
+		}
+		else if (ast.macros.get(head.text)) |def| {
+			if (def.args == .expr){
+				const arity = def.args.expr.items.len;
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				expr.expr.append(outer) catch unreachable;
+			}
+			else{
+				err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+				return ParseError.UnexpectedToken;
+			}
+		}
+		expr.expr.append(head) catch unreachable;
+		i.* += 1;
+	}
+	return expr;
+}
+
+pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!Expr {
+	const expr = Expr{
+		.expr = Buffer(*Expr).init(ast.mem.*)
+	};
+	while (tokens[i].tag != CLOSE){
+		const head = tokens[i];
+		if (head.tag == QUOTE){
+			i.* += 1;
+			if (head.tag == OPEN){
+				i.* += 1;
+				const inner = try parse_sub_expression_until(ast, i, tokens, err);
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = Expr{
+					.quote = ast.mem.create(Expr) catch unreachable
+				};
+				outer.quote.* = inner;
+				expr.expr.append(outer) catch unreachable;
+			}
+			const outer = ast.mem.create(Expr) catch unreachable;
+			outer.* = Expr{
+				.atom = head
+			};
+			expr.expr.append(outer) catch unreachable;
+		}
+		if (head.tag == OPEN){
+			i.* += 1;
+			expr.expr.append(try parse_sub_expression_until(ast, i, tokens, err)) catch unreachable;
+		}
+		switch (head.tag){ //TODO
+			PROG => {},
+			IF => {},
+			LAMBDA => {},
+			LET => {},
+			SET => {},
+			LE => {},
+			LT => {},
+			GE => {},
+			GT => {},
+			EQ => {},
+			NE => {},
+			ADD => {},
+			SUB => {},
+			MUL => {},
+			DIV => {},
+			MOD => {},
+			AND => {},
+			OR => {},
+			XOR => {},
+			UNQUOTE => {},
+			else => {}
+		}
+		else if (ast.defs.get(head.text)) |def| {
+			if (def.args == .expr){
+				const arity = def.args.expr.items.len;
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				expr.expr.append(outer) catch unreachable;
+			}
+			else{
+				i.* += 1;
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = parse_sub_expression_until(ast, i, tokens, err);
+				expr.expr.append(outer) catch unreachable;
+				return expr;
+			}
+		}
+		else if (ast.macros.get(head.text)) |def| {
+			if (def.args == .expr){
+				const arity = def.args.expr.items.len;
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				expr.expr.append(outer) catch unreachable;
+			}
+			else{
+				i.* += 1;
+				ccont outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = parse_sub_expression_until(ast, i, tokens, err);
+				expr.expr.append(outer) catch unreachable;
+				return expr;
+			}
+		}
+		expr.expr.append(head) catch unreachable;
+		i.* += 1;
+	}
+	return expr;
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
