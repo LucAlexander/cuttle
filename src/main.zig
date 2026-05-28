@@ -3,6 +3,7 @@ const Buffer = std.ArrayList;
 const Map = std.StringHashMap;
 
 const ERROR_MAX = 128;
+const ERROR_LINES = 3;
 
 const TOKEN = u64;
 
@@ -53,7 +54,7 @@ const Error = struct {
 
 const ErrorLog = struct {
 	mem: *const std.mem.Allocator,
-	log: Buffer(Error)
+	log: Buffer(Error),
 	
 	pub fn init(mem: *const std.mem.Allocator) ErrorLog {
 		return ErrorLog{
@@ -64,18 +65,74 @@ const ErrorLog = struct {
 
 	pub fn append(self: *ErrorLog, index:u64, comptime fmt: []const u8, args: anytype) void {
 		var err = Error{
-			.post = index,
-			.message = self.mem.alloc(u8, ERROR_MAX) catch unreachable;
+			.pos = index,
+			.message = self.mem.alloc(u8, ERROR_MAX) catch unreachable
 		};
 		const result = std.fmt.bufPrint(err.message, fmt, args) catch unreachable;
 		err.message.len = result.len;
-		log.append(err) catch unreachable;
+		self.log.append(err) catch unreachable;
 	}
 
-	pub fn handle(self: *ErrorLog) void {
-		//TODO
+	pub fn handle(self: *ErrorLog, text: []const u8) void {
+		for (self.log.items) |er| {
+			tokenize_error_report(er, text);
+		}
 	}
 };
+
+pub fn is_symbol(c: u8) bool {
+	if (c == '!' or c == '#' or c == '$' or c == '%' or
+		c == '^' or c == '`' or c == '*' or c == '+' or
+		c == '-' or c == '/' or c == '?' or c == ':' or
+		c == ';' or c == '.' or c == '~' or c == '<' or
+		c == '>' or c == '{' or c == '}' or c == '[' or
+		c == ']' or c == '=' or c == ','){
+		return true;
+	}
+	return false;
+}
+
+pub fn tokenize_error_report(er: Error, text: []const u8) void {
+	var i: u64 = 0;
+	var line: u64 = 0;
+	var token_count: u64 = 0;
+	while (i < text.len){
+		if (token_count == er.pos){
+			break;
+		}
+		const c = text[i];
+		switch(c){
+			' ', '\n', '\t', '\r' => {
+				i += 1;
+				line = i;
+				continue;
+			},
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
+				token_count += 1;
+				i += 1;
+				continue;
+			},
+			else => {
+				var k: u64 = i;
+				while ((std.ascii.isAlphanumeric(text[k]) or is_symbol(text[k])) and (k < text.len)){
+					k += 1;
+				}
+				token_count += 1;
+				continue;
+			}
+		}
+	}
+	i = line;
+	var line_count: u64 = 0;
+	std.debug.print("[ERROR] Line {}: {s}\n", .{line, er.message});
+	while (i < text.len and line_count < ERROR_LINES){
+		const c = text[i];
+		if (c == '\n'){
+			line_count += 1;
+		}
+		std.debug.print("{c}", .{c});
+	}
+}
 
 pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	var tokens = Buffer(Token).init(mem.*);
@@ -96,8 +153,8 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put(">=", GE ) catch unreachable;
 	tokmap.put("==", EQ ) catch unreachable;
 	tokmap.put("!=", NE ) catch unreachable;
-	while (i < tokens.len){
-		const c = tokens[i];
+	while (i < text.len){
+		const c = text[i];
 		switch(c){
 			' ', '\n', '\t', '\r' => {
 				i += 1;
@@ -110,10 +167,10 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				}) catch unreachable;
 				i += 1;
 				continue;
-			}
+			},
 			else => {
-				const k = i;
-				while ((std.ascii.isAlphanumeric(text[k]) or is_symbol(text[k])) and (k < tokens.len)){
+				var k: u64 = i;
+				while ((std.ascii.isAlphanumeric(text[k]) or is_symbol(text[k])) and (k < text.len)){
 					k += 1;
 				}
 				if (tokmap.get(text[i..k])) |tok| {
@@ -126,14 +183,14 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				}
 				_ = std.fmt.parseInt(i64, text[i..k], 10) catch {
 					_ = std.fmt.parseInt(u64, text[i..k], 10) catch {
-						_ = std.fmt.parseFloat(f64, text[i..k], 10) catch {
+						_ = std.fmt.parseFloat(f64, text[i..k]) catch {
 							tokens.append(Token{
 								.text = text[i..k],
 								.tag = IDEN
 							}) catch unreachable;
 							i = k;
 							continue;
-						}
+						};
 						tokens.append(Token{
 							.text = text[i..k],
 							.tag = FLOAT 
@@ -171,7 +228,7 @@ const AST = struct {
 const Definition = struct {
 	name: Token,
 	args: Expr,
-	expression: Expr
+	expression: ?Expr
 };
 
 const Expr = union(enum){
@@ -183,7 +240,7 @@ const Expr = union(enum){
 
 const ParseError = error {
 	UnexpectedToken
-}
+};
 
 pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
 	var ast = AST{
@@ -198,7 +255,7 @@ pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) Par
 		if (tokens[i].tag == LET){
 			try parse_let(&ast, &i, tokens, err);
 		}
-		else if (tokens[i].tag == DEF){
+		else if (tokens[i].tag == DEFINE){
 			try parse_def(&ast, &i, tokens, err);
 		}
 		else if (tokens[i].tag == MACRO){
@@ -207,29 +264,25 @@ pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) Par
 		else if (tokens[i].tag == UNIVERSE){
 			try parse_universe(&ast, &i, tokens, err);
 		}
-		else {
-			if (ast.universes.getPtr(tokens[i].tag)) |universe| {
-				try parse_universe_def(&ast, &i, tokens, tokens[i], universe, err);
-			}
+		else if (ast.universes.getPtr(tokens[i].text)) |universe| {
+			try parse_universe_def(&ast, &i, tokens, tokens[i], universe, err);
 		}
-		else {
-			err.append(i, "Unexpected token at top level {s}\n", .{tokens[i].text});
-		}
+		err.append(i, "Unexpected token at top level {s}\n", .{tokens[i].text});
 	}
 	return ast;
 }
 
 pub fn parse_let(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
 	i.* += 1;
-	if (tokens[i].tag != IDEN){
-		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i].text});
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	if (ast.let.get(tokens[i].text)) |_| {
-		err.append(i.*, "Duplicate global let definition {s}\n", .{tokens[i].text});
+	if (ast.let.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate global let definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	const name = tokens[i];
+	const name = tokens[i.*];
 	i.* += 1;
 	const expr = try parse_expression(ast, i, tokens, err);
 	ast.let.put(name.text, expr) catch unreachable;
@@ -237,84 +290,89 @@ pub fn parse_let(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError
 
 pub fn parse_def(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
 	i.* += 1;
-	if (tokens[i].tag != IDEN){
-		err.append(i.*, "Expected identifier for name of definition, found {s}\n", .{tokens[i].text});
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of definition, found {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	if (ast.def.get(tokens[i].text)) |_| {
-		err.append(i.*, "Duplicate definition {s}\n", .{tokens[i].text});
+	if (ast.defs.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	const name = tokens[i];
+	const name = tokens[i.*];
 	i.* += 1;
 	const args = try parse_expression(ast, i, tokens, err);
-	const expression = try parse_expression(ast, i, token, err);
-	ast.defs.put(Definition{
+	ast.defs.put(name.text, Definition{
 		.name = name,
 		.args = args,
-		.expression = expression
+		.expression = null
 	}) catch unreachable;
+	const expression = try parse_expression(ast, i, tokens, err);
+	if (ast.defs.getPtr(name.text)) |def| {
+		def.expression = expression;
+	}
 }
 
 pub fn parse_macro(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
 	i.* += 1;
-	if (tokens[i].tag != IDEN){
-		err.append(i.*, "Expected identifier for name of macro, found {s}\n", .{tokens[i].text});
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of macro, found {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	if (ast.macros.get(tokens[i].text)) |_| {
-		err.append(i.*, "Duplicate macro {s}\n", .{tokens[i].text});
+	if (ast.macros.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate macro {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	const name = tokens[i];
+	const name = tokens[i.*];
 	i.* += 1;
 	const args = try parse_expression(ast, i, tokens, err);
-	const expression = try parse_expression(ast, i, token, err);
-	ast.macros.put(Definition{
+	ast.macros.put(name.text, Definition{
 		.name = name,
 		.args = args,
-		.expression = expression
+		.expression = null 
 	}) catch unreachable;
+	const expression = try parse_expression(ast, i, tokens, err);
+	if (ast.macros.getPtr(name.text)) |mac| {
+		mac.expression = expression;
+	}
 }
 
 pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
 	i.* += 1;
-	if (tokens[i].tag != IDEN){
-		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i].text});
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of universe, found {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	if (ast.universes.get(tokens[i].text)) |_| {
-		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i].text})
+	if (ast.universes.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	ast.universes.put(tokens[i].text, Map(Definition).init(ast.mem.*)) catch unreachable;
+	ast.universes.put(tokens[i.*].text, Map(Definition).init(ast.mem.*)) catch unreachable;
 	i.* += 1;
 }
 
 pub fn parse_universe_def(ast: *AST, i: *u64, tokens: []Token, name: Token, universe: *Map(Definition), err: *ErrorLog) ParseError!void {
 	i.* += 1;
-	if (tokens[i].tag != IDEN){
-		err.append(i.*, "Expected identifier for name of {s}, found {s}\n", .{name.text, tokens[i].text});
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for name of {s}, found {s}\n", .{name.text, tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	if (universe.get(tokens[i].text)) |_| {
-		err.append(i.*, "Duplicate {s} {s}\n", .{name.text, tokens[i].text});
+	if (universe.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate {s} {s}\n", .{name.text, tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	const name = tokens[i];
+	const n = tokens[i.*];
 	i.* += 1;
 	const args = try parse_expression(ast, i, tokens, err);
-	const expression = try parse_expression(ast, i, token, err);
-	universe.put(Definition{
-		.name = name,
+	const expression = try parse_expression(ast, i, tokens, err);
+	universe.put(n.text, Definition{
+		.name = n,
 		.args = args,
 		.expression = expression
 	}) catch unreachable;
 }
 
-//TODO lexical scoping for let?
 pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!Expr {
-	const head = tokens[i];
+	const head = tokens[i.*];
 	if (head.tag == QUOTE){
 		i.* += 1;
 		if (head.tag == OPEN){
@@ -337,7 +395,7 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 	}
 	switch (head.tag){
 		PROG => {
-			err.append(i, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
+			err.append(i.*, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
 			return ParseError.UnexpectedToken;
 		},
 		IF => {
@@ -346,11 +404,11 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 		LAMBDA => {
 			const lambda = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 			if (lambda != .expr){
-				err.append(i, "lambda was not an expression\n", .{});
+				err.append(i.*, "lambda was not an expression\n", .{});
 				return ParseError.UnexpectedToken;
 			}
 			if (lambda.expr.items.len != 3){
-				err.append(i, "lambda requires arguments and a body\n", .{});
+				err.append(i.*, "lambda requires arguments and a body\n", .{});
 				return ParseError.UnexpectedToken;
 			}
 			return lambda;
@@ -358,19 +416,19 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 		LET => {
 			const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 			if (let != .expr){
-				err.append(i, "let expression was not an expression\n", .{});
+				err.append(i.*, "let expression was not an expression\n", .{});
 				return ParseError.UnexpectedToken;
 			}
 			if (let.expr.items.len != 3){
-				err.append(i, "let expression requires a name and an initial value", .{});
+				err.append(i.*, "let expression requires a name and an initial value", .{});
 				return ParseError.UnexpectedToken;
 			}
-			if (let.expr.items[1] != .atom){
-				err.append(i, "let expression requires a single name", .{});
+			if (let.expr.items[1].* != .atom){
+				err.append(i.*, "let expression requires a single name", .{});
 				return ParseError.UnexpectedToken;
 			}
 			if (let.expr.items[1].atom.tag != IDEN){
-				err.append(i, "let expression requires an identifier for a name", .{});
+				err.append(i.*, "let expression requires an identifier for a name", .{});
 				return ParseError.UnexpectedToken;
 			}
 			return let;
@@ -378,19 +436,19 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 		SET => {
 			const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 			if (let != .expr){
-				err.append(i, "set expression was not an expression\n", .{});
+				err.append(i.*, "set expression was not an expression\n", .{});
 				return ParseError.UnexpectedToken;
 			}
 			if (let.expr.items.len != 3){
-				err.append(i, "set expression requires a name and an initial value", .{});
+				err.append(i.*, "set expression requires a name and an initial value", .{});
 				return ParseError.UnexpectedToken;
 			}
-			if (let.expr.items[1] != .atom){
-				err.append(i, "set expression requires a single name", .{});
+			if (let.expr.items[1].* != .atom){
+				err.append(i.*, "set expression requires a single name", .{});
 				return ParseError.UnexpectedToken;
 			}
 			if (let.expr.items[1].atom.tag != IDEN){
-				err.append(i, "set expression requires an identifier for a name", .{});
+				err.append(i.*, "set expression requires an identifier for a name", .{});
 				return ParseError.UnexpectedToken;
 			}
 			return let;
@@ -401,17 +459,23 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 		UNQUOTE => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 		},
-		DEF => {}, // TODO
-		MACRO => {},
-		UNIVERSE => {},
+		DEFINE => {
+			try parse_def(ast, i, tokens, err);
+		},
+		MACRO => {
+			try parse_macro(ast, i, tokens, err);
+		},
+		UNIVERSE => {
+			try parse_universe(ast, i, tokens, err);
+		},
 		else => {}
 	}
-	else if (ast.defs.get(head.text)) |def| {
+	if (ast.defs.get(head.text)) |def| {
 		if (def.args == .expr){
 			const arity = def.args.expr.items.len;
 			return try parse_sub_expression_arity(ast, i, tokens, err, arity);
 		}
-		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+		err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 		return ParseError.UnexpectedToken;
 	}
 	else if (ast.macros.get(head.text)) |def| {
@@ -419,23 +483,23 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			const arity = def.args.expr.items.len;
 			return try parse_sub_expression_arity(ast, i, tokens, err, arity);
 		}
-		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+		err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 		return ParseError.UnexpectedToken;
 	}
-	else if (ast.let.get(head.text)) |let| {
-		err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+	else if (ast.let.get(head.text)) |_| {
+		err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 		return ParseError.UnexpectedToken;
 	}
-	err.append(i, "Unknown token, no arity found {s}\n", .{head.text});
+	err.append(i.*, "Unknown token, no arity found {s}\n", .{head.text});
 	return ParseError.UnexpectedToken;
 }
 
 pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog, arity: u64) ParseError!Expr {
-	const expr = Expr{
+	var expr = Expr{
 		.expr = Buffer(*Expr).init(ast.mem.*)
 	};
 	while (expr.expr.items.len < arity+1){
-		const head = tokens[i];
+		const head = tokens[i.*];
 		if (head.tag == QUOTE){
 			i.* += 1;
 			if (head.tag == OPEN){
@@ -456,15 +520,17 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 		}
 		if (head.tag == OPEN){
 			i.* += 1;
-			expr.expr.append(try parse_sub_expression_until(ast, i, tokens, err)) catch unreachable;
+			const outer = ast.mem.create(Expr) catch unreachable;
+			outer.* = try parse_sub_expression_until(ast, i, tokens, err);
+			expr.expr.append(outer) catch unreachable;
 		}
 		else if (head.tag == CLOSE){
-			err.append(i, "Unexpected close to open expression\n", .{});
+			err.append(i.*, "Unexpected close to open expression\n", .{});
 			return ParseError.UnexpectedToken;
 		}
 		switch (head.tag){
 			PROG => {
-				err.append(i, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
+				err.append(i.*, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
 				return ParseError.UnexpectedToken;
 			},
 			IF => {
@@ -473,11 +539,11 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			LAMBDA => {
 				const lambda = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (lambda != .expr){
-					err.append(i, "lambda was not an expression\n", .{});
+					err.append(i.*, "lambda was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (lambda.expr.items.len != 3){
-					err.append(i, "lambda requires arguments and a body\n", .{});
+					err.append(i.*, "lambda requires arguments and a body\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				return lambda;
@@ -485,19 +551,19 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			LET => {
 				const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (let != .expr){
-					err.append(i, "let expression was not an expression\n", .{});
+					err.append(i.*, "let expression was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items.len != 3){
-					err.append(i, "let expression requires a name and an initial value", .{});
+					err.append(i.*, "let expression requires a name and an initial value", .{});
 					return ParseError.UnexpectedToken;
 				}
-				if (let.expr.items[1] != .atom){
-					err.append(i, "let expression requires a single name", .{});
+				if (let.expr.items[1].* != .atom){
+					err.append(i.*, "let expression requires a single name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items[1].atom.tag != IDEN){
-					err.append(i, "let expression requires an identifier for a name", .{});
+					err.append(i.*, "let expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				return let;
@@ -505,19 +571,19 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			SET => {
 				const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (let != .expr){
-					err.append(i, "set expression was not an expression\n", .{});
+					err.append(i.*, "set expression was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items.len != 3){
-					err.append(i, "set expression requires a name and an initial value", .{});
+					err.append(i.*, "set expression requires a name and an initial value", .{});
 					return ParseError.UnexpectedToken;
 				}
-				if (let.expr.items[1] != .atom){
-					err.append(i, "set expression requires a single name", .{});
+				if (let.expr.items[1].* != .atom){
+					err.append(i.*, "set expression requires a single name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items[1].atom.tag != IDEN){
-					err.append(i, "set expression requires an identifier for a name", .{});
+					err.append(i.*, "set expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				return let;
@@ -528,47 +594,57 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			UNQUOTE => {
 				return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 			},
-			DEF => {}, // TODO
-			MACRO => {},
-			UNIVERSE => {},
+			DEFINE => {
+				try parse_def(ast, i, tokens, err);
+			},
+			MACRO => {
+				try parse_macro(ast, i, tokens, err);
+			},
+			UNIVERSE => {
+				try parse_universe(ast, i, tokens, err);
+			},
 			else => {}
 		}
 		if (ast.defs.get(head.text)) |def| {
 			if (def.args == .expr){
-				const arity = def.args.expr.items.len;
+				const ar = def.args.expr.items.len;
 				const outer = ast.mem.create(Expr) catch unreachable;
-				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, ar);
 				expr.expr.append(outer) catch unreachable;
 			}
 			else {
-				err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+				err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 				return ParseError.UnexpectedToken;
 			}
 		}
 		else if (ast.macros.get(head.text)) |def| {
 			if (def.args == .expr){
-				const arity = def.args.expr.items.len;
+				const ar = def.args.expr.items.len;
 				const outer = ast.mem.create(Expr) catch unreachable;
-				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, arity);
+				outer.* = try parse_sub_expression_arity(ast, i, tokens, err, ar);
 				expr.expr.append(outer) catch unreachable;
 			}
 			else{
-				err.append(i, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
+				err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 				return ParseError.UnexpectedToken;
 			}
 		}
-		expr.expr.append(head) catch unreachable;
+		const outer = ast.mem.create(Expr) catch unreachable;
+		outer.* = Expr{
+			.atom = head
+		};
+		expr.expr.append(outer) catch unreachable;
 		i.* += 1;
 	}
 	return expr;
 }
 
 pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!Expr {
-	const expr = Expr{
+	var expr = Expr{
 		.expr = Buffer(*Expr).init(ast.mem.*)
 	};
-	while (tokens[i].tag != CLOSE){
-		const head = tokens[i];
+	while (tokens[i.*].tag != CLOSE){
+		const head = tokens[i.*];
 		if (head.tag == QUOTE){
 			i.* += 1;
 			if (head.tag == OPEN){
@@ -589,7 +665,9 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 		}
 		if (head.tag == OPEN){
 			i.* += 1;
-			expr.expr.append(try parse_sub_expression_until(ast, i, tokens, err)) catch unreachable;
+			const outer = ast.mem.create(Expr) catch unreachable;
+			outer.* = try parse_sub_expression_until(ast, i, tokens, err);
+			expr.expr.append(outer) catch unreachable;
 		}
 		switch (head.tag){
 			PROG => {
@@ -600,10 +678,10 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 					};
 					const continued = try parse_sub_expression_until(ast, i, tokens, err);
 					expr.expr.append(outer) catch unreachable;
-					expr.expr.appendSlice(continued.items) catch unreachable;
+					expr.expr.appendSlice(continued.expr.items) catch unreachable;
 					return expr;
 				}
-				err.append(i, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
+				err.append(i.*, "Cannot parse arbitrary arity of prog without wrapper\n", .{});
 				return ParseError.UnexpectedToken;
 			},
 			IF => {
@@ -615,11 +693,11 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			LAMBDA => {
 				const lambda = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (lambda != .expr){
-					err.append(i, "lambda was not an expression\n", .{});
+					err.append(i.*, "lambda was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (lambda.expr.items.len != 3){
-					err.append(i, "lambda requires arguments and a body\n", .{});
+					err.append(i.*, "lambda requires arguments and a body\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				const outer = ast.mem.create(Expr) catch unreachable;
@@ -630,19 +708,19 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			LET => {
 				const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (let != .expr){
-					err.append(i, "let expression was not an expression\n", .{});
+					err.append(i.*, "let expression was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items.len != 3){
-					err.append(i, "let expression requires a name and an initial value", .{});
+					err.append(i.*, "let expression requires a name and an initial value", .{});
 					return ParseError.UnexpectedToken;
 				}
-				if (let.expr.items[1] != .atom){
-					err.append(i, "let expression requires a single name", .{});
+				if (let.expr.items[1].* != .atom){
+					err.append(i.*, "let expression requires a single name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items[1].atom.tag != IDEN){
-					err.append(i, "let expression requires an identifier for a name", .{});
+					err.append(i.*, "let expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				const outer = ast.mem.create(Expr) catch unreachable;
@@ -653,19 +731,19 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			SET => {
 				const let = try parse_sub_expression_arity(ast, i, tokens, err, 2);
 				if (let != .expr){
-					err.append(i, "set expression was not an expression\n", .{});
+					err.append(i.*, "set expression was not an expression\n", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items.len != 3){
-					err.append(i, "set expression requires a name and an initial value", .{});
+					err.append(i.*, "set expression requires a name and an initial value", .{});
 					return ParseError.UnexpectedToken;
 				}
-				if (let.expr.items[1] != .atom){
-					err.append(i, "set expression requires a single name", .{});
+				if (let.expr.items[1].* != .atom){
+					err.append(i.*, "set expression requires a single name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				if (let.expr.items[1].atom.tag != IDEN){
-					err.append(i, "set expression requires an identifier for a name", .{});
+					err.append(i.*, "set expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
 				const outer = ast.mem.create(Expr) catch unreachable;
@@ -685,12 +763,18 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				expr.expr.append(outer) catch unreachable;
 				continue;
 			},
-			DEF => {}, // TODO
-			MACRO => {},
-			UNIVERSE => {},
+			DEFINE => {
+				try parse_def(ast, i, tokens, err);
+			},
+			MACRO => {
+				try parse_macro(ast, i, tokens, err);
+			},
+			UNIVERSE => {
+				try parse_universe(ast, i, tokens, err);
+			},
 			else => {}
 		}
-		else if (ast.defs.get(head.text)) |def| {
+		if (ast.defs.get(head.text)) |def| {
 			if (def.args == .expr){
 				const arity = def.args.expr.items.len;
 				const outer = ast.mem.create(Expr) catch unreachable;
@@ -700,7 +784,7 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			else{
 				i.* += 1;
 				const outer = ast.mem.create(Expr) catch unreachable;
-				outer.* = parse_sub_expression_until(ast, i, tokens, err);
+				outer.* = try parse_sub_expression_until(ast, i, tokens, err);
 				expr.expr.append(outer) catch unreachable;
 				return expr;
 			}
@@ -714,16 +798,25 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			}
 			else{
 				i.* += 1;
-				ccont outer = ast.mem.create(Expr) catch unreachable;
-				outer.* = parse_sub_expression_until(ast, i, tokens, err);
+				const outer = ast.mem.create(Expr) catch unreachable;
+				outer.* = try parse_sub_expression_until(ast, i, tokens, err);
 				expr.expr.append(outer) catch unreachable;
 				return expr;
 			}
 		}
-		expr.expr.append(head) catch unreachable;
+		const outer = ast.mem.create(Expr) catch unreachable;
+		outer.* = Expr{
+			.atom = head
+		};
+		expr.expr.append(outer) catch unreachable;
 		i.* += 1;
 	}
 	return expr;
+}
+
+//TODO lexical scoping for let?
+pub fn interpret(_: *AST, _: *ErrorLog) *Expr {
+	//TODO
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -764,11 +857,11 @@ pub fn main() anyerror!void {
 		return;
 	}
 	const filename = args[1];
-	const outfile = args[2];
+	_ = args[2];
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
 	var err = ErrorLog.init(&main_mem);
-	var ast = parse(&main_mem, tokens.items, &err) catch {
-		err.handle();
+	_ = parse(&main_mem, tokens.items, &err) catch {
+		err.handle(contents);
 	};
 }
