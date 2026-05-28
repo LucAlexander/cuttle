@@ -1007,14 +1007,44 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 	switch (expr.*){
 		.expr => {
 			if (expr.expr.items.len != 0){
-				if (expr.expr.items[0].* == .atom){
-					//TODO
+				var i: u64 = 0;
+				while (i < expr.expr.items.len){
+					if (expr.expr.items[i].* == .atom){
+						if (ast.macros.get(expr.atom.text)) |def| {
+							if (def.args == .atom){
+								//TODO all remaining subexprs are args
+							}
+							else if (def.args == .expr){
+								if (def.args.expr.items.len <= expr.expr.items.len-i){
+									//TODO apply args and macroreplace
+								}
+							}
+							else{
+								err.append(def.name.pos, "Quote args not allowed\n", .{});
+								return ParseError.UnexpectedToken;
+							}
+						}
+						continue;
+					}
+					try walk_expr(ast, expr.expr.items[i], err);
+					i += 1;
 				}
 			}
 		},
 		.atom => {
 			if (ast.macros.get(expr.atom.text)) |def| {
-				//TODO
+				if (def.args == .atom){
+					//TODO macroreplace
+				}
+				else if  (def.args == .expr){
+					if (def.args.expr.items.len == 0){
+						//TODO macroreplace
+					}
+				}
+				else{
+					err.append(def.name.pos, "Quote args not allowed\n", .{});
+					return ParseError.UnexpectedToken;
+				}
 			}
 		},
 		.quote => {
