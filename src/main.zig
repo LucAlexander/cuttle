@@ -41,6 +41,7 @@ const LE = 15;
 const GE = 16;
 const EQ = 17;
 const NE = 18;
+const STR = 19;
 
 const Token = struct{
 	text: []const u8,
@@ -113,6 +114,14 @@ pub fn tokenize_error_report(er: Error, text: []const u8) void {
 				i += 1;
 				continue;
 			},
+			'"' => {
+				i += 1;
+				while (text[i] != '"' and i < text.len){
+					i += 1;
+				}
+				i += 1;
+				continue;
+			},
 			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
 				token_count += 1;
 				i += 1;
@@ -168,6 +177,19 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 		switch(c){
 			' ', '\n', '\t', '\r' => {
 				i += 1;
+				continue;
+			},
+			'"' => {
+				const start = i;
+				i += 1;
+				while (text[i] != '"' and i < text.len){
+					i += 1;
+				}
+				i += 1;
+				tokens.append(Token{
+					.text = text[start .. i],
+					.tag = STR
+				}) catch unreachable;
 				continue;
 			},
 			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
@@ -554,7 +576,7 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 		err.append(i.*, "Cannot parse arbitrary arity of term {s}\n", .{head.text});
 		return ParseError.UnexpectedToken;
 	}
-	if (head.tag != IDEN and head.tag != INT and head.tag != NAT and head.tag != FLOAT){
+	if (head.tag != IDEN and head.tag != INT and head.tag != NAT and head.tag != FLOAT and head.tag != STR){
 		err.append(i.*, "Unknown token, expected expression, found {s}\n", .{head.text});
 		return ParseError.UnexpectedToken;
 	}
