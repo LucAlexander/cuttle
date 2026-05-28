@@ -2,6 +2,8 @@ const std = @import("std");
 const Buffer = std.ArrayList;
 const Map = std.StringHashMap;
 
+const debug = true;
+
 const ERROR_MAX = 128;
 const ERROR_LINES = 5;
 
@@ -25,7 +27,7 @@ const CLOSE = ')';
 const DEFINE = 0;
 const MACRO = 1;
 const UNIVERSE = 2;
-const CUT = 3;
+const STR = 3;
 const HEAD = 4;
 const PROG = 5;
 const IF = 6;
@@ -41,7 +43,6 @@ const LE = 15;
 const GE = 16;
 const EQ = 17;
 const NE = 18;
-const STR = 19;
 
 const Token = struct{
 	text: []const u8,
@@ -160,7 +161,6 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put("define", DEFINE ) catch unreachable;
 	tokmap.put("macro", MACRO ) catch unreachable;
 	tokmap.put("universe", UNIVERSE ) catch unreachable;
-	tokmap.put("cut", CUT ) catch unreachable;
 	tokmap.put("head", HEAD ) catch unreachable;
 	tokmap.put("prog", PROG ) catch unreachable;
 	tokmap.put("if", IF ) catch unreachable;
@@ -306,6 +306,28 @@ const Expr = union(enum){
 	expr: Buffer(*Expr),
 	atom: Token,
 	quote: *Expr,
+
+	pub fn depth(self: *Expr) u64  {
+		switch (self.*){
+			.expr => {
+				var max_depth:u64 = 0;
+				for (self.expr.items) |inner| {
+					const inner_depth = inner.depth();
+					if (inner_depth > max_depth){
+						max_depth = inner_depth;
+					}
+				}
+				return max_depth+1;
+			},
+			.atom => {
+				return 1;
+			},
+			.quote => {
+				return 1+self.quote.depth();
+			}
+		}
+		return 0;
+	}
 
 	pub fn show(self: *Expr) void {
 		switch (self.*){
@@ -543,16 +565,13 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			return let;
 		},
 		DEFINE => {
-			try parse_def(ast, i, tokens, err);
-			return parse_expression(ast, i, tokens, err);
+			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
 		},
 		MACRO => {
-			try parse_macro(ast, i, tokens, err);
-			return parse_expression(ast, i, tokens, err);
+			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
 		},
 		UNIVERSE => {
-			try parse_universe(ast, i, tokens, err);
-			return parse_expression(ast, i, tokens, err);
+			return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 		},
 		else => {}
 	}
@@ -699,15 +718,21 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				continue;
 			},
 			DEFINE => {
-				try parse_def(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			MACRO => {
-				try parse_macro(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			UNIVERSE => {
-				try parse_universe(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			else => {}
@@ -862,15 +887,21 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				continue;
 			},
 			DEFINE => {
-				try parse_def(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			MACRO => {
-				try parse_macro(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			UNIVERSE => {
-				try parse_universe(ast, i, tokens, err);
+				const definition = ast.mem.create(Expr) catch unreachable;
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
+				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			else => {}
@@ -918,9 +949,43 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 	return expr;
 }
 
-//TODO lexical scoping for let?
-pub fn interpret(_: *AST, _: *ErrorLog) *Expr {
-	//TODO
+const Let = struct{
+	name: Token,
+	value: *Expr
+};
+
+pub fn static_interpret(ast: *AST, err: *ErrorLog) *Expr {
+	if (ast.defs.getPtr("main")) |entry| {
+		walk_def(ast, entry, err);
+	}
+}
+
+pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
+	if (def.args.depth() > 2){
+		err.append(def.name, "Cannot destructure definition args\n", .{});
+		return ParseError.UnexpectedToken;
+	}
+	try walk_expr(ast, &def.expression, err);
+}
+
+pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
+	switch (expr.*){
+		.expr => {
+			if (expr.data.items.len != 0){
+				if (expr.data.items[0] == .atom){
+					//TODO
+				}
+			}
+		},
+		.atom => {
+			if (ast.macros.get(expr.atom.text)) |def| {
+				//TODO
+			}
+		},
+		.quote => {
+			return;
+		}
+	}
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -968,5 +1033,18 @@ pub fn main() anyerror!void {
 		err.handle(contents);
 		return;
 	};
-	ast.show();
+	if (err.log.items.len != 0){
+		err.handle(contents);
+		return;
+	}
+	if (debug){
+		ast.show();
+	}
+	static_interpret(&ast, &err);
 }
+
+//TODO
+// the loop
+	// macro pass, go over all terms starting from main and find macro calls, evaluating in their own evironment
+	// list parse
+	// list interpret
