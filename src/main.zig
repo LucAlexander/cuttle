@@ -46,7 +46,8 @@ const NE = 18;
 
 const Token = struct{
 	text: []const u8,
-	tag: TOKEN
+	tag: TOKEN,
+	pos: u64
 };
 
 const Error = struct {
@@ -188,14 +189,16 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				i += 1;
 				tokens.append(Token{
 					.text = text[start .. i],
-					.tag = STR
+					.tag = STR,
+					.pos = tokens.items.len
 				}) catch unreachable;
 				continue;
 			},
 			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
 				tokens.append(Token{
 					.text = text[i..i+1],
-					.tag = c
+					.tag = c,
+					.pos = tokens.items.len
 				}) catch unreachable;
 				i += 1;
 				continue;
@@ -208,7 +211,8 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				if (tokmap.get(text[i..k])) |tok| {
 					tokens.append(Token{
 						.text = text[i..k],
-						.tag = tok
+						.tag = tok,
+						.pos = tokens.items.len
 					}) catch unreachable;
 					i = k;
 					continue;
@@ -218,28 +222,32 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 						_ = std.fmt.parseFloat(f64, text[i..k]) catch {
 							tokens.append(Token{
 								.text = text[i..k],
-								.tag = IDEN
+								.tag = IDEN,
+								.pos = tokens.items.len
 							}) catch unreachable;
 							i = k;
 							continue;
 						};
 						tokens.append(Token{
 							.text = text[i..k],
-							.tag = FLOAT 
+							.tag = FLOAT ,
+							.pos = tokens.items.len
 						}) catch unreachable;
 						i = k;
 						continue;
 					};
 					tokens.append(Token{
 						.text = text[i..k],
-						.tag = NAT
+						.tag = NAT,
+						.pos = tokens.items.len
 					}) catch unreachable;
 					i = k;
 					continue;
 				};
 				tokens.append(Token{
 					.text = text[i..k],
-					.tag = INT
+					.tag = INT,
+					.pos = tokens.items.len
 				}) catch unreachable;
 				i = k;
 				continue;
@@ -253,7 +261,7 @@ const AST = struct {
 	mem: *const std.mem.Allocator,
 	let: Map(Expr),
 	defs: Map(Definition),
-	macros: Map(Definition),
+	macros: Map(Macro),
 	universes: Map(Map(Definition)),
 
 	pub fn show(self: *AST) void {
@@ -268,9 +276,8 @@ const AST = struct {
 			entry.value_ptr.show();
 			std.debug.print("\n", .{});
 		}
-		dit = self.macros.iterator();
-		while (dit.next()) |entry| {
-			std.debug.print("macro ", .{});
+		var macit = self.macros.iterator();
+		while (macit.next()) |entry| {
 			entry.value_ptr.show();
 			std.debug.print("\n", .{});
 		}
@@ -284,6 +291,21 @@ const AST = struct {
 				std.debug.print("\n", .{});
 			}
 			std.debug.print("\n", .{});
+		}
+	}
+};
+
+const Macro = struct {
+	name: Token,
+	env: Token,
+	args: Expr,
+	expression: ?Expr,
+
+	pub fn show(self: *Macro) void {
+		std.debug.print("macro (in {s}) {s} ", .{self.env.text, self.name.text});
+		self.args.show();
+		if (self.expression) |*expr| {
+			expr.show();
 		}
 	}
 };
@@ -358,7 +380,7 @@ pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) Par
 		.mem = mem,
 		.let = Map(Expr).init(mem.*),
 		.defs = Map(Definition).init(mem.*),
-		.macros = Map(Definition).init(mem.*),
+		.macros = Map(Macro).init(mem.*),
 		.universes = Map(Map(Definition)).init(mem.*)
 	};
 	var i: u64 = 0;
@@ -438,9 +460,16 @@ pub fn parse_macro(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseErr
 	}
 	const name = tokens[i.*];
 	i.* += 1;
+	const env = tokens[i.*];
+	if (env.tag != IDEN and env.tag != HOLE){
+		err.append(i.*, "Unknown environment {s}", .{env.text});
+		return ParseError.UnexpectedToken;
+	}
+	i.* += 1;
 	const args = try parse_expression(ast, i, tokens, err);
-	ast.macros.put(name.text, Definition{
+	ast.macros.put(name.text, Macro{
 		.name = name,
+		.env = env,
 		.args = args,
 		.expression = null 
 	}) catch unreachable;
@@ -954,25 +983,31 @@ const Let = struct{
 	value: *Expr
 };
 
-pub fn static_interpret(ast: *AST, err: *ErrorLog) *Expr {
+pub fn static_interpret(ast: *AST, err: *ErrorLog) ParseError!void {
 	if (ast.defs.getPtr("main")) |entry| {
-		walk_def(ast, entry, err);
+		try walk_def(ast, entry, err);
 	}
 }
 
 pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
 	if (def.args.depth() > 2){
-		err.append(def.name, "Cannot destructure definition args\n", .{});
+		err.append(def.name.pos, "Cannot destructure definition args\n", .{});
 		return ParseError.UnexpectedToken;
 	}
-	try walk_expr(ast, &def.expression, err);
+	if (def.expression) |*expr| {
+		try walk_expr(ast, expr, err);
+	}
+	else{
+		err.append(def.name.pos, "Cannot find expression for definition\n", .{});
+		return ParseError.UnexpectedToken;
+	}
 }
 
 pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 	switch (expr.*){
 		.expr => {
-			if (expr.data.items.len != 0){
-				if (expr.data.items[0] == .atom){
+			if (expr.expr.items.len != 0){
+				if (expr.expr.items[0].* == .atom){
 					//TODO
 				}
 			}
@@ -1040,7 +1075,14 @@ pub fn main() anyerror!void {
 	if (debug){
 		ast.show();
 	}
-	static_interpret(&ast, &err);
+	static_interpret(&ast, &err) catch {
+		err.handle(contents);
+		return;
+	};
+	if (err.log.items.len != 0){
+		err.handle(contents);
+		return;
+	}
 }
 
 //TODO
