@@ -984,18 +984,24 @@ const Let = struct{
 };
 
 pub fn static_interpret(ast: *AST, err: *ErrorLog) ParseError!void {
-	if (ast.defs.getPtr("main")) |entry| {
-		try walk_def(ast, entry, err);
+	var it = ast.defs.iterator();
+	while (it.next()) |entry| {
+		if (std.mem.eql("main", entry.key_ptr.*) == false){
+			try walk_def(ast, entry.value_ptr, err, false);
+		}
+	}
+	if (ast.defs.getPtr("main")) |def| {
+		try walk_def(ast, def, err, true);
 	}
 }
 
-pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
+pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog, run: bool) ParseError!void {
 	if (def.args.depth() > 2){
 		err.append(def.name.pos, "Cannot destructure definition args\n", .{});
 		return ParseError.UnexpectedToken;
 	}
 	if (def.expression) |*expr| {
-		def.expression = try walk_expr(ast, expr, err);
+		def.expression = try walk_expr(ast, expr, err, run);
 	}
 	else{
 		err.append(def.name.pos, "Cannot find expression for definition\n", .{});
@@ -1086,7 +1092,7 @@ pub fn argmap_descend(argmap: *Map(*Expr), left: *Expr, right: *Expr, err: *Erro
 	}
 }
 
-pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool) ParseError!*Expr {
 	var processed: ?*Expr = null;
 	switch (expr.*){
 		.expr => {
@@ -1102,14 +1108,14 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
 							if (def.args == .atom){
 								const argmap = try macro_argmap(ast, def.args, expr.items[i..expr.expr.items.len], err);
 								const replaced = distribute_argmap(ast, argmap, def.expression);
-								const interpreted = try walk_expr(ast, replaced, err);
+								const interpreted = try walk_expr(ast, replaced, err, run);
 								new_expr.append(interpreted) catch unreachable;
 							}
 							else if (def.args == .expr){
 								if (def.args.expr.items.len <= expr.expr.items.len-i){
 									const argmap = try macro_argmap(ast, def.args, expr.expr.items[i..i+def.args.expr.items.len], err);
 									const replaced = distribute_argmap(ast, argmap, def.expression);
-									const interpreted = try walk_expr(ast, replaced, err);
+									const interpreted = try walk_expr(ast, replaced, err, run);
 									new_expr.append(interpreted) catch unreachable;
 								}
 							}
@@ -1120,7 +1126,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
 						}
 						continue;
 					}
-					const new = try walk_expr(ast, expr.expr.items[i], err);
+					const new = try walk_expr(ast, expr.expr.items[i], err, run);
 					new_expr.append(new) catch unreachable;
 					i += 1;
 				}
@@ -1136,12 +1142,12 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
 					};
 					const argmap = try macro_argmap(ast, def.args, empty, err);
 					const replaced = distribute_argmap(ast, argmap, def.expression);
-					const interpreted = try walk_expr(ast, replaced, err);
+					const interpreted = try walk_expr(ast, replaced, err, run);
 					processed = interpreted;
 				}
 				else if  (def.args == .expr){
 					if (def.args.expr.items.len == 0){
-						const interpreted = try walk_expr(ast, replaced, err);
+						const interpreted = try walk_expr(ast, replaced, err, run);
 						processed = interpreted;
 					}
 				}
@@ -1155,7 +1161,40 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
 			processed = expr;
 		}
 	}
-	//TODO interpret processed
+	//TODO list parse for top level defs
+	var scope = Buffer(Let).init(ast.mem.*);
+	return try interpret(ast, &scope, processed, err);
+}
+
+pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+	switch (expr.*) {
+		.expr => {
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				i += 1;
+				const save = scope.items.len;
+				expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err);
+				scope.items.len = save;
+			}
+			//TODO call check
+		}
+		.atom => {
+			for (scope.items) |let| {
+				if (std.mem.eql(u8, expr.atom.text, let.name.text)){
+					const save = scope.items.len;
+					const new = try interpret(ast, scope, let.value, err);
+					scope.items.len = save;
+					return new;
+				}
+			}
+			if (ast.defs.get(expr.atom.text)) |def| {
+				//TODO call check
+			}
+		},
+		.quote => {
+			return expr;
+		}
+	}
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
