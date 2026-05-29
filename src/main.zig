@@ -1003,6 +1003,10 @@ pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
 	}
 }
 
+pub fn macro_argmap(ast: *AST, structure: *Expr, args: []*Expr) Map(*Expr) {
+	//TODO
+}
+
 pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 	switch (expr.*){
 		.expr => {
@@ -1016,6 +1020,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 							}
 							else if (def.args == .expr){
 								if (def.args.expr.items.len <= expr.expr.items.len-i){
+									const argmap = macro_argmap(ast, def.args, expr.expr.items[i..i+def.args.expr.items.len]);
 									//TODO apply args and macroreplace
 								}
 							}
