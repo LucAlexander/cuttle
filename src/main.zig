@@ -995,7 +995,7 @@ pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
 		return ParseError.UnexpectedToken;
 	}
 	if (def.expression) |*expr| {
-		try walk_expr(ast, expr, err);
+		def.expression = try walk_expr(ast, expr, err);
 	}
 	else{
 		err.append(def.name.pos, "Cannot find expression for definition\n", .{});
@@ -1003,25 +1003,114 @@ pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog) ParseError!void {
 	}
 }
 
-pub fn macro_argmap(ast: *AST, structure: *Expr, args: []*Expr) Map(*Expr) {
-	//TODO
+pub fn macro_argmap(ast: *AST, structure: *Expr, args: []*Expr, err: *ErrorLog) ParseError!Map(*Expr) {
+	const map = Map(*Expr).init(ast.mem.*);
+	if (structure.* == .atom){
+		const argexpr = ast.mem.create(Expr) catch unreachable;
+		argexpr.* = Expr{
+			.expr = Buffer(*Expr).init(ast.mem.*)
+		};
+		argexpr.expr.appendSlice(args) catch unreachable;
+		map.put(structure.atom.text, argexpr) catch unreachable;
+	}
+	else if (structure.* == .QUOTE){
+		if (nearest_token(structure)) |pos| {
+			err.append(pos.pos, "Cannot quote arguments\n".{});
+		}
+		else{
+			err.append(0, "Cannot quote arguments\n", .{});
+		}
+		return ParseError.UnexpectedToken;
+	}
+	for (args, structure.expr.items) |arg, candidate| {
+		try argmap_descend(&argmap, arg, candidate, err);
+	}
+	return map;
 }
 
-pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
+pub fn nearest_token(expr: *Expr) ?Token {
 	switch (expr.*){
 		.expr => {
+			if (expr.expr.items.len == 0){
+				return null;
+			}
+			return nearest_token(expr.expr.items[0]);
+		}
+		.atom => {
+			return expr.atom;
+		},
+		.quote => {
+			return nearest_token(expr.quote);
+		}
+	}
+	return null;
+}
+
+pub fn argmap_descend(argmap: *Map(*Expr), left: *Expr, right: *Expr, err: *ErrorLog) ParseError!void {
+	switch(left.*){
+		.atom => {
+			argmap.put(left.atom.text, right) catch unreachable;
+		},
+		.expr => {
+			if (right.* != .expr){
+				if (nearest_token(left)) |pos| {
+					err.append(pos.pos, "argument structure does not match requested structure\n", .{});
+				}
+				else{
+					err.append(0, "argument structure does not match requested structure\n", .{});
+				}
+				return ParseError.UnexpectedToken;
+			}
+			if (left.expr.items.len != right.expr.items.len){
+				if (nearest_token(left)) |pos| {
+					err.append(pos.pos, "argument structure does not match requested structure\n", .{});
+				}
+				else{
+					err.append(0, "argument structure does not match requested structure\n", .{});
+				}
+				return ParseError.UnexpectedToken;
+			}
+			for (left.expr.items, right.expr.items) |l, r| {
+				argmap_descend(argmap, l, r, err);
+			}
+		},
+		.quote => {
+			if (nearest_token(left)) |pos| {
+				err.append(pos.pos, "Cannot quote arguments\n", .{});
+			}
+			else{
+				err.append(0, "Cannot quote arguments\n", .{});
+			}
+			return ParseError.UnexpectedToken;
+		}
+	}
+}
+
+pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+	var processed: ?*Expr = null;
+	switch (expr.*){
+		.expr => {
+			var new_expr = ast.mem.create(Expr) catch unreachable;
+			new_expr.* = Expr{
+				.expr = Buffer(*Expr).init(ast.mem.*)
+			};
 			if (expr.expr.items.len != 0){
 				var i: u64 = 0;
 				while (i < expr.expr.items.len){
 					if (expr.expr.items[i].* == .atom){
 						if (ast.macros.get(expr.atom.text)) |def| {
 							if (def.args == .atom){
-								//TODO all remaining subexprs are args
+								const argmap = try macro_argmap(ast, def.args, expr.items[i..expr.expr.items.len], err);
+								const replaced = distribute_argmap(ast, argmap, def.expression);
+								const interpreted = try walk_expr(ast, replaced, err);
+								new_expr.append(interpreted) catch unreachable;
 							}
 							else if (def.args == .expr){
 								if (def.args.expr.items.len <= expr.expr.items.len-i){
-									const argmap = macro_argmap(ast, def.args, expr.expr.items[i..i+def.args.expr.items.len]);
-									//TODO apply args and macroreplace
+									const argmap = try macro_argmap(ast, def.args, expr.expr.items[i..i+def.args.expr.items.len], err);
+									const replaced = distribute_argmap(ast, argmap, def.expression);
+									const interpreted = try walk_expr(ast, replaced, err);
+									new_expr.append(interpreted) catch unreachable;
 								}
 							}
 							else{
@@ -1031,19 +1120,29 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 						}
 						continue;
 					}
-					try walk_expr(ast, expr.expr.items[i], err);
+					const new = try walk_expr(ast, expr.expr.items[i], err);
+					new_expr.append(new) catch unreachable;
 					i += 1;
 				}
 			}
+			processed = new_expr;
 		},
 		.atom => {
 			if (ast.macros.get(expr.atom.text)) |def| {
 				if (def.args == .atom){
-					//TODO macroreplace
+					const empty = ast.mem.create(Expr) catch unreachable;
+					empty.* = Expr{
+						.expr = Buffer(*Expr).init(ast.mem.*)
+					};
+					const argmap = try macro_argmap(ast, def.args, empty, err);
+					const replaced = distribute_argmap(ast, argmap, def.expression);
+					const interpreted = try walk_expr(ast, replaced, err);
+					processed = interpreted;
 				}
 				else if  (def.args == .expr){
 					if (def.args.expr.items.len == 0){
-						//TODO macroreplace
+						const interpreted = try walk_expr(ast, replaced, err);
+						processed = interpreted;
 					}
 				}
 				else{
@@ -1053,9 +1152,10 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog) ParseError!void {
 			}
 		},
 		.quote => {
-			return;
+			processed = expr;
 		}
 	}
+	//TODO interpret processed
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -1122,6 +1222,5 @@ pub fn main() anyerror!void {
 
 //TODO
 // the loop
-	// macro pass, go over all terms starting from main and find macro calls, evaluating in their own evironment
 	// list parse
 	// list interpret
