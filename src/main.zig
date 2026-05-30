@@ -1163,7 +1163,6 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool) ParseError!*
 			processed = expr;
 		}
 	}
-	//TODO list parse for top level defs
 	var scope = Buffer(Let).init(ast.mem.*);
 	return try interpret(ast, &scope, processed, err);
 }
@@ -1176,16 +1175,57 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 				if (head.* == .atom){
 					switch (head.atom.tag){
 						PROG => {
+							if (expr.expr.items.len > 1){
+								var i: u64 = 1;
+								var last: ?*Expr = null;
+								while (i < expr.expr.items.len){
+									i += 1;
+									last = try interpret(ast, scope, expr, err);
+								}
+								if (last)|l|{
+									return l;
+								}
+							}
 						},
 						IF => {
+							const cond = expr.expr.items[1];
+							const cons = expr.expr.items[2];
+							const alt = expr.expr.items[3];
+							const b = try interpret(ast, scope, cond, err);
+							if (b == .atom){
+								if (std.mem.eql(u8, b.atom.text, "0")){
+									return try interpret(ast, scope, cons, err);
+								}
+							}
+							return try interpret(ast, scope, alt, err);
 						},
 						LET => {
+							const name = expr.expr.items[1];
+							const val = expr.expr.items[2];
+							scope.append(Let{
+								.name = name.atom,
+								.value = try interpret(ast, scope, val, err)
+							}) catch unreachable;
+							return expr;
 						},
 						SET => {
+							const name = expr.expr.items[1];
+							const val = expr.expr.items[2];
+							for (scope.items) |*let| {
+								if (std.mem.eql(u8, let.name.text, name.text)){
+									let.value = try interpret(ast, scope, val, err);
+									return expr;
+								}
+							}
 						},
-						LAMBDA, LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
+						LAMBDA => {
+							return expr;
+						},
+						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
 						},
 						UNQUOTE => {
+							const expression = expr.expr.items[1];
+							return try interpret(ast, scope, val, err);
 						},
 						DEFINE => {
 						},
@@ -1205,6 +1245,34 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 					if (ast.defs.get(head.atom.text)) |def| {
 						const ret = try argapply_defs(ast, scope, def, expr, err);
 						return ret;
+					}
+				}
+				else if (head == .expr){
+					if (head.expr.items.len > 0){
+						const islambda = head.expr.items[0];
+						if (islambda == .atom){
+							if (islambda.atom.tag == LAMBDA){
+								if (expr.items.len > 1){
+									const save = scope.items.len;
+									scope.append(Let{
+										.name = head.expr.items[1],
+										.value = try interpret(ast, scope, expr.expr.items[1], err)
+									}) catch unreachable;
+									const new = try interpret(ast, scope, head.expr.items[2], err);
+									scope.items.len = save;
+									if (expr.expr.items.len > 2){
+										const rest = ast.mem.create(ast.mem.*) catch unreachable;
+										rest.* = Expr{
+											.expr = Buffer(*Expr).init(ast.mem.*)
+										};
+										rest.expr.append(new) catch unreachable;
+										rest.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
+										return try interpret(ast, scope, rest, err);
+									}
+									return new;
+								}
+							}
+						}
 					}
 				}
 			}
