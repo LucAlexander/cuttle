@@ -1221,28 +1221,41 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 						LAMBDA => {
 							return expr;
 						},
-						LE => {},
-						LT => {},
-						GE => {},
-						GT => {},
-						EQ => {},
-						NE => {},
-						ADD => {},
-						SUB => {},
-						MUL => {},
-						DIV => {},
-						MOD => {},
-						AND => {},
-						OR => {},
-						XOR => {
-							//TODO
+						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
+							const left = try interpret(ast, scope, expr.expr.items[1], err);
+							const right = try interpret(ast, scope, expr.expr.items[1], err);
+							if (left.* != .atom){
+								err.append(0, "Expected atom for left side of binary expression\n", .{});
+								return ParseError.UnexpectedToken;
+							}
+							if (right.* != atom){
+								err.append(0, "Expected atom for right side of binary expression\n", .{});
+								return ParseError.UnexpectedToken;
+							}
+							return try binop(head.atom.tag, left, right);
 						},
 						UNQUOTE => {
 							const expression = expr.expr.items[1];
 							return try interpret(ast, scope, val, err);
 						},
 						DEFINE => {
-							//TODO
+							if (expr.expr.items.len != 4){
+								return expr;
+							}
+							if (expr.expr.items[1].* != .atom){
+								return expr;
+							}
+							if (expr.expr.items[1].atom.tag != IDEN){
+								return expr;
+							}
+							const name = expr.expr.items[1].atom;
+							const args = expr.expr.items[2];
+							const expression = expr.expr.items[3];
+							ast.defs.put(name.text, Definition{
+								.name = name,
+								.args = args,
+								.expression = expression
+							}) catch unreachable;
 							const empty = ast.mem.create(Expr) catch unreachable;
 							empty.* = Expr{
 								.expr = Buffer(Expr).init(ast.mem.*)
@@ -1250,7 +1263,32 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 							return empty;
 						},
 						MACRO => {
-							//TODO
+							if (expr.expr.items.len != 5){
+								return expr;
+							}
+							if (expr.expr.items[1].* != .atom){
+								return expr;
+							}
+							if (expr.expr.items[1].atom.tag != IDEN){
+								return expr;
+							}
+							if (expr.expr.items[2].* != .atom){
+								return expr;
+							}
+							if (expr.expr.items[2].atom.tag != IDEN){
+								return expr;
+							}
+							const name = expr.expr.items[1].atom;
+							const env = expr.expr.items[1].atom;
+							const args = expr.expr.items[2];
+							const expression = expr.expr.items[3];
+							ast.macros.put(name.text, Macro{
+								.name = name,
+								.env = env,
+								.args = args,
+								.expression = expression
+							}) catch unreachable;
+
 							const empty = ast.mem.create(Expr) catch unreachable;
 							empty.* = Expr{
 								.expr = Buffer(Expr).init(ast.mem.*)
@@ -1258,7 +1296,16 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 							return empty;
 						},
 						UNIVERSE => {
-							//TODO
+							if (expr.expr.items.len != 2){
+								return expr;
+							}
+							if (expr.expr.items[1].* != .atom){
+								return expr;
+							}
+							if (expr.expr.items[1].atom.tag != IDEN){
+								return expr;
+							}
+							ast.universes.put(expr.expr.items[1].atom.text, Map(Definition).init(ast.mem.*)) catch unreachable;
 							const empty = ast.mem.create(Expr) catch unreachable;
 							empty.* = Expr{
 								.expr = Buffer(Expr).init(ast.mem.*)
@@ -1338,6 +1385,43 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 		}
 	}
 	return expr;
+}
+
+pub fn binop(op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
+	switch (op){
+		LE => {
+		},
+		LT => {
+		},
+		GE => {
+		},
+		GT => {
+		},
+		EQ => {
+		},
+		NE => {
+		},
+		ADD => {
+		},
+		SUB => {
+		},
+		MUL => {
+		},
+		DIV => {
+		},
+		MOD => {
+	
+		},
+		AND => {
+	
+		},
+		OR => {
+			
+		},
+		XOR => {
+			//TODO
+		}
+	}
 }
 
 pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: Definition, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
