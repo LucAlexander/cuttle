@@ -1194,10 +1194,10 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 							const b = try interpret(ast, scope, cond, err);
 							if (b == .atom){
 								if (std.mem.eql(u8, b.atom.text, "0")){
-									return try interpret(ast, scope, cons, err);
+									return try interpret(ast, scope, alt, err);
 								}
 							}
-							return try interpret(ast, scope, alt, err);
+							return try interpret(ast, scope, cons, err);
 						},
 						LET => {
 							const name = expr.expr.items[1];
@@ -1221,17 +1221,49 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 						LAMBDA => {
 							return expr;
 						},
-						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
+						LE => {},
+						LT => {},
+						GE => {},
+						GT => {},
+						EQ => {},
+						NE => {},
+						ADD => {},
+						SUB => {},
+						MUL => {},
+						DIV => {},
+						MOD => {},
+						AND => {},
+						OR => {},
+						XOR => {
+							//TODO
 						},
 						UNQUOTE => {
 							const expression = expr.expr.items[1];
 							return try interpret(ast, scope, val, err);
 						},
 						DEFINE => {
+							//TODO
+							const empty = ast.mem.create(Expr) catch unreachable;
+							empty.* = Expr{
+								.expr = Buffer(Expr).init(ast.mem.*)
+							};
+							return empty;
 						},
 						MACRO => {
+							//TODO
+							const empty = ast.mem.create(Expr) catch unreachable;
+							empty.* = Expr{
+								.expr = Buffer(Expr).init(ast.mem.*)
+							};
+							return empty;
 						},
 						UNIVERSE => {
+							//TODO
+							const empty = ast.mem.create(Expr) catch unreachable;
+							empty.* = Expr{
+								.expr = Buffer(Expr).init(ast.mem.*)
+							};
+							return empty;
 						},
 						else => {}
 					}
@@ -1254,10 +1286,20 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 							if (islambda.atom.tag == LAMBDA){
 								if (expr.items.len > 1){
 									const save = scope.items.len;
-									scope.append(Let{
-										.name = head.expr.items[1],
-										.value = try interpret(ast, scope, expr.expr.items[1], err)
-									}) catch unreachable;
+									if (head.expr.items[1].expr.items.len >= expr.expr.items.len-1){
+										err.append(head.expr.items[0].atom.pos, "not enough arguments for lambda\n", .{});
+										return ParseError.UnexpectedToken;
+									}
+									for (head.expr.items[1].expr.items, 0..) |argname, i| {
+										if (argname.* != .atom){
+											err.append(head.expr.items[0].atom.pos, "lambda arggs must be atoms\n", .{});
+											return ParseError.UnexpectedToken;
+										}
+										scope.append(Let{
+											.name = argname.atom
+											.value = try interpret(ast, scope, expr.expr.items[i+1], err)
+										}) catch unreachable;
+									}
 									const new = try interpret(ast, scope, head.expr.items[2], err);
 									scope.items.len = save;
 									if (expr.expr.items.len > 2){
@@ -1266,7 +1308,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 											.expr = Buffer(*Expr).init(ast.mem.*)
 										};
 										rest.expr.append(new) catch unreachable;
-										rest.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
+										rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+2..]) catch unreachable;
 										return try interpret(ast, scope, rest, err);
 									}
 									return new;
