@@ -1171,7 +1171,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 	switch (expr.*) {
 		.expr => {
 			if (expr.expr.items.len != 0){
-				const head = expr.expr.items[0];
+				var head = expr.expr.items[0];
 				if (head.* == .atom){
 					switch (head.atom.tag){
 						PROG => {
@@ -1321,48 +1321,22 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 						expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err);
 						scope.items.len = save;
 					}
-					if (ast.defs.get(head.atom.text)) |def| {
-						const ret = try argapply_defs(ast, scope, def, expr, err);
-						return ret;
+					head = expr.expr.items[0];
+					if (head.* == .atom){
+						if (ast.defs.get(head.atom.text)) |def| {
+							const ret = try argapply_defs(ast, scope, def, expr, err);
+							return ret;
+						}
+						else if (ast.universes.getPtr(head.atom.text)) |universe| {
+							return try list_parse_universe_def(universe, expr, err);
+						}
+					}
+					else if (head.* == .expr){
+						return try lambda(ast, scope, head, expr, err);
 					}
 				}
 				else if (head == .expr){
-					if (head.expr.items.len > 0){
-						const islambda = head.expr.items[0];
-						if (islambda == .atom){
-							if (islambda.atom.tag == LAMBDA){
-								if (expr.items.len > 1){
-									const save = scope.items.len;
-									if (head.expr.items[1].expr.items.len >= expr.expr.items.len-1){
-										err.append(head.expr.items[0].atom.pos, "not enough arguments for lambda\n", .{});
-										return ParseError.UnexpectedToken;
-									}
-									for (head.expr.items[1].expr.items, 0..) |argname, i| {
-										if (argname.* != .atom){
-											err.append(head.expr.items[0].atom.pos, "lambda arggs must be atoms\n", .{});
-											return ParseError.UnexpectedToken;
-										}
-										scope.append(Let{
-											.name = argname.atom
-											.value = try interpret(ast, scope, expr.expr.items[i+1], err)
-										}) catch unreachable;
-									}
-									const new = try interpret(ast, scope, head.expr.items[2], err);
-									scope.items.len = save;
-									if (expr.expr.items.len > 2){
-										const rest = ast.mem.create(ast.mem.*) catch unreachable;
-										rest.* = Expr{
-											.expr = Buffer(*Expr).init(ast.mem.*)
-										};
-										rest.expr.append(new) catch unreachable;
-										rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+2..]) catch unreachable;
-										return try interpret(ast, scope, rest, err);
-									}
-									return new;
-								}
-							}
-						}
-					}
+					return try lambda(ast, scope, head, expr, err);
 				}
 			}
 		},
@@ -1385,6 +1359,71 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 		}
 	}
 	return expr;
+}
+
+pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+	if (head.expr.items.len > 0){
+		const islambda = head.expr.items[0];
+		if (islambda == .atom){
+			if (islambda.atom.tag == LAMBDA){
+				if (expr.items.len > 1){
+					const save = scope.items.len;
+					if (head.expr.items[1].expr.items.len >= expr.expr.items.len-1){
+						err.append(head.expr.items[0].atom.pos, "not enough arguments for lambda\n", .{});
+						return ParseError.UnexpectedToken;
+					}
+					for (head.expr.items[1].expr.items, 0..) |argname, i| {
+						if (argname.* != .atom){
+							err.append(head.expr.items[0].atom.pos, "lambda arggs must be atoms\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						scope.append(Let{
+							.name = argname.atom
+							.value = try interpret(ast, scope, expr.expr.items[i+1], err)
+						}) catch unreachable;
+					}
+					const new = try interpret(ast, scope, head.expr.items[2], err);
+					scope.items.len = save;
+					if (expr.expr.items.len > 2){
+						const rest = ast.mem.create(ast.mem.*) catch unreachable;
+						rest.* = Expr{
+							.expr = Buffer(*Expr).init(ast.mem.*)
+						};
+						rest.expr.append(new) catch unreachable;
+						rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+2..]) catch unreachable;
+						return try interpret(ast, scope, rest, err);
+					}
+					return new;
+				}
+			}
+		}
+	}
+	return expr;
+}
+
+pub fn list_parse_universe_def(universe: *Map(Definition), expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+	if (expr.expr.items.len != 4){
+		return expr;
+	}
+	if (expr.expr.items[1].* != .atom){
+		return expr;
+	}
+	if (expr.expr.items[1].atom.tag != IDEN){
+		return expr;
+	}
+	const name = expr.expr.items[1].atom;
+	const args = expr.expr.items[2];
+	const expression = expr.expr.items[3];
+	universe.put(name.text, Definition{
+		.name = name,
+		.args = args,
+		.expression = expression
+	}) catch unreachable;
+	const empty = ast.mem.create(Expr) catch unreachable;
+	empty.* = Expr{
+		.expr = Buffer(Expr).init(ast.mem.*)
+	};
+	return empty;
 }
 
 pub fn binop(op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
@@ -1532,3 +1571,4 @@ pub fn main() anyerror!void {
 	// list parse
 	// list interpret
 //macro environments
+//nested universe definitions
