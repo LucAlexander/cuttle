@@ -263,6 +263,7 @@ const AST = struct {
 	defs: Map(Definition),
 	macros: Map(Macro),
 	universes: Map(Map(Definition)),
+	env: Map(Map(Expr)),
 
 	pub fn show(self: *AST) void {
 		var it = self.let.iterator();
@@ -381,7 +382,8 @@ pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) Par
 		.let = Map(Expr).init(mem.*),
 		.defs = Map(Definition).init(mem.*),
 		.macros = Map(Macro).init(mem.*),
-		.universes = Map(Map(Definition)).init(mem.*)
+		.universes = Map(Map(Definition)).init(mem.*),
+		.env = Map(Map(Expr)).init(mem.*)
 	};
 	var i: u64 = 0;
 	while (i<tokens.len){
@@ -1169,15 +1171,44 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool) ParseError!*
 pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) ParseError!*Expr {
 	switch (expr.*) {
 		.expr => {
-			var i: u64 = 0;
-			while (i < expr.expr.items.len){
-				i += 1;
-				const save = scope.items.len;
-				expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err);
-				scope.items.len = save;
+			if (expr.expr.items.len != 0){
+				const head = expr.expr.items[0];
+				if (head.* == .atom){
+					switch (head.atom.tag){
+						PROG => {
+						},
+						IF => {
+						},
+						LET => {
+						},
+						SET => {
+						},
+						LAMBDA, LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
+						},
+						UNQUOTE => {
+						},
+						DEFINE => {
+						},
+						MACRO => {
+						},
+						UNIVERSE => {
+						},
+						else => {}
+					}
+					var i: u64 = 0;
+					while (i < expr.expr.items.len){
+						i += 1;
+						const save = scope.items.len;
+						expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err);
+						scope.items.len = save;
+					}
+					if (ast.defs.get(head.atom.text)) |def| {
+						const ret = try argapply_defs(ast, scope, def, expr, err);
+						return ret;
+					}
+				}
 			}
-			//TODO call check
-		}
+		},
 		.atom => {
 			for (scope.items) |let| {
 				if (std.mem.eql(u8, expr.atom.text, let.name.text)){
@@ -1188,13 +1219,56 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog) Pa
 				}
 			}
 			if (ast.defs.get(expr.atom.text)) |def| {
-				//TODO call check
+				const ret = try argapply_defs(ast, scope, def, expr, err);
+				return ret;
 			}
 		},
 		.quote => {
 			return expr;
 		}
 	}
+	return expr;
+}
+
+pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: Definition, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+	const save = scope.items.len;
+	if (def.args == .atom){
+		let.append(Let{
+			.name = def.args,
+			.value = expr
+		}) catch unreachable;
+	}
+	else if (def.args == .expr){
+		if (def.args.items.len < expr.expr.items.len-1)
+		for (def.args.items, expr.expr.items[1..]) |arg, exp| {
+			if (arg.* == .atom){
+				let.append(Let{
+					.name = arg.atom,
+					.value = exp
+				}) catch unreachable;
+			}
+			else{
+				err.append(def.name.pos, "cannot structure definition args\n", .{});
+				return ParseError.UnexpectedToken;
+			}
+		}
+	}
+	else if (def.args == .quote){
+		err.append(def.name.pos, "cannot quote args\n", .{});
+		return ParseError.UnexpectedToken;
+	}
+	const ret = try interpret(ast, scope, def.expression, err);
+	scope.items.len = save;
+	if (def.args.items.len < expr.expr.items.len-1){
+		const new = ast.mem.create(Expr) catch unreachable;
+		new.* = Expr{
+			.expr = Buffer(*Expr).init(ast.mem.*)
+		};
+		new.expr.append(ret) catch unreachable;
+		new.expr.appendSlice(expr.expr.items[def.args.items.len+2..]) catch unreachable;
+		return try interpret(ast, scope, ret, err);
+	}
+	return ret;
 }
 
 pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
@@ -1263,3 +1337,4 @@ pub fn main() anyerror!void {
 // the loop
 	// list parse
 	// list interpret
+//macro environments
