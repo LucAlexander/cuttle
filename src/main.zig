@@ -1162,7 +1162,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 				var i: u64 = 0;
 				while (i < expr.expr.items.len){
 					if (expr.expr.items[i].* == .atom){
-						if (ast.macros.getPtr(expr.atom.text)) |def| {
+						if (ast.macros.getPtr(expr.expr.items[i].atom.text)) |def| {
 							if (def.args == .atom){
 								var argmap = try macro_argmap(ast, &def.args, expr.expr.items[i..expr.expr.items.len], err);
 								if (def.expression)|*expression|{
@@ -1186,6 +1186,8 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 								return ParseError.UnexpectedToken;
 							}
 						}
+						new_expr.expr.append(expr.expr.items[i]) catch unreachable;
+						i += 1;
 						continue;
 					}
 					const new = try walk_expr(ast, expr.expr.items[i], err, run, null);
@@ -1273,6 +1275,9 @@ pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
 pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	switch (expr.*) {
 		.expr => {
+			if (expr.expr.items.len == 1){
+				return try interpret(ast, scope, expr.expr.items[0], err, null, universe, universe_defs);
+			}
 			if (expr.expr.items.len != 0){
 				var head = expr.expr.items[0];
 				if (head.* == .atom){
@@ -1602,7 +1607,7 @@ pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *Er
 			if (islambda.atom.tag == LAMBDA){
 				if (expr.expr.items.len > 1){
 					const save = scope.items.len;
-					if (head.expr.items[1].expr.items.len >= expr.expr.items.len-1){
+					if (head.expr.items[1].expr.items.len > expr.expr.items.len-1){
 						err.append(head.expr.items[0].atom.pos, "not enough arguments for lambda\n", .{});
 						return ParseError.UnexpectedToken;
 					}
@@ -1618,13 +1623,13 @@ pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *Er
 					}
 					const new = try interpret(ast, scope, head.expr.items[2], err, null, universe, universe_defs);
 					scope.items.len = save;
-					if (expr.expr.items.len > 2){
+					if (expr.expr.items.len > head.expr.items[1].expr.items.len){
 						const rest = ast.mem.create(Expr) catch unreachable;
 						rest.* = Expr{
 							.expr = Buffer(*Expr).init(ast.mem.*)
 						};
 						rest.expr.append(new) catch unreachable;
-						rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+2..]) catch unreachable;
+						rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+1..]) catch unreachable;
 						return try interpret(ast, scope, rest, err, null, universe, universe_defs);
 					}
 					return new;
@@ -1678,22 +1683,24 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 		}) catch unreachable;
 	}
 	else if (def.args == .expr){
-		if (def.args.expr.items.len < expr.expr.items.len-1){
-			for (def.args.expr.items, expr.expr.items[1..]) |arg, exp| {
-				if (arg.* == .atom){
-					scope.append(Let{
-						.name = arg.atom,
-						.value = exp
-					}) catch unreachable;
-				}
-				else{
-					err.append(def.name.pos, "cannot structure definition args\n", .{});
-					return ParseError.UnexpectedToken;
+		if (expr.* == .expr){
+			if (def.args.expr.items.len <= expr.expr.items.len-1){
+				for (def.args.expr.items, expr.expr.items[1..]) |arg, exp| {
+					if (arg.* == .atom){
+						scope.append(Let{
+							.name = arg.atom,
+							.value = exp
+						}) catch unreachable;
+					}
+					else{
+						err.append(def.name.pos, "cannot structure definition args\n", .{});
+						return ParseError.UnexpectedToken;
+					}
 				}
 			}
-		}
-		else{
-			return expr;
+			else{
+				return expr;
+			}
 		}
 	}
 	else if (def.args == .quote){
@@ -1703,15 +1710,17 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 	if (def.expression) |*expression| {
 		const ret = try interpret(ast, scope, expression, err, null, universe, universe_defs);
 		scope.items.len = save;
-		if (def.args.expr.items.len < expr.expr.items.len-1){
-			const checked = ret;
-			const new = ast.mem.create(Expr) catch unreachable;
-			new.* = Expr{
-				.expr = Buffer(*Expr).init(ast.mem.*)
-			};
-			new.expr.append(checked) catch unreachable;
-			new.expr.appendSlice(expr.expr.items[def.args.expr.items.len+2..]) catch unreachable;
-			return try interpret(ast, scope, new, err, null, universe, universe_defs);
+		if (expr.* == .expr){
+			if (def.args.expr.items.len < expr.expr.items.len-1){
+				const checked = ret;
+				const new = ast.mem.create(Expr) catch unreachable;
+				new.* = Expr{
+					.expr = Buffer(*Expr).init(ast.mem.*)
+				};
+				new.expr.append(checked) catch unreachable;
+				new.expr.appendSlice(expr.expr.items[def.args.expr.items.len+2..]) catch unreachable;
+				return try interpret(ast, scope, new, err, null, universe, universe_defs);
+			}
 		}
 		return ret;
 	}
