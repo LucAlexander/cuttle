@@ -1216,15 +1216,15 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 	}
 	if (run){
 		var scope = Buffer(Let).init(ast.mem.*);
-		const data = ast.defs;
 		var it = ast.universes.iterator();
 		while (it.next()) |entry| {
 			ast.defs = entry.value_ptr.*;
-			_ = try interpret(ast, &scope, processed.?, err, macro);
-			scope.clearRetainingCapacity();
+			if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
+				_ = try interpret(ast, &scope, processed.?, err, macro, uni, entry.value_ptr);
+				scope.clearRetainingCapacity();
+			}
 		}
-		ast.defs = data;
-		return try interpret(ast, &scope, processed.?, err, macro);
+		return try interpret(ast, &scope, processed.?, err, macro, null, null);
 	}
 	return processed.?;
 }
@@ -1257,7 +1257,7 @@ pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
 	return new;
 }
 
-pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token) ParseError!*Expr {
+pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	switch (expr.*) {
 		.expr => {
 			if (expr.expr.items.len != 0){
@@ -1270,7 +1270,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								var last: ?*Expr = null;
 								while (i < expr.expr.items.len){
 									i += 1;
-									last = try interpret(ast, scope, expr, err, null);
+									last = try interpret(ast, scope, expr, err, null, universe, universe_defs);
 								}
 								if (last)|l|{
 									return l;
@@ -1281,39 +1281,39 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							const cond = expr.expr.items[1];
 							const cons = expr.expr.items[2];
 							const alt = expr.expr.items[3];
-							const b = try interpret(ast, scope, cond, err, null);
+							const b = try interpret(ast, scope, cond, err, null, universe, universe_defs);
 							if (b.* == .atom){
 								if (b.atom.value) |val| {
 									if (val == .float){
 										if (val.float == 0){
-											return try interpret(ast, scope, alt, err, null);
+											return try interpret(ast, scope, alt, err, null, universe, universe_defs);
 										}
 									}
 									if (val == .nat){
 										if (val.nat == 0){
-											return try interpret(ast, scope, alt, err, null);
+											return try interpret(ast, scope, alt, err, null, universe, universe_defs);
 										}
 									}
 									if (val == .int){
 										if (val.int == 0){
-											return try interpret(ast, scope, alt, err, null);
+											return try interpret(ast, scope, alt, err, null, universe, universe_defs);
 										}
 									}
 								}
 							}
-							return try interpret(ast, scope, cons, err, null);
+							return try interpret(ast, scope, cons, err, null, universe, universe_defs);
 						},
 						LET => {
 							const name = expr.expr.items[1];
 							const val = expr.expr.items[2];
 							if (top_level_macro) |env| {
 								if (ast.env.getPtr(env.text)) |lets| {
-									const eval = try interpret(ast, scope, val, err, null);
+									const eval = try interpret(ast, scope, val, err, null, universe, universe_defs);
 									lets.put(name.atom.text, eval.*) catch unreachable;
 								}
 								else{
 									var map = Map(Expr).init(ast.mem.*);
-									const eval = try interpret(ast, scope, val, err, null);
+									const eval = try interpret(ast, scope, val, err, null, universe, universe_defs);
 									map.put(name.atom.text, eval.*) catch unreachable;
 									ast.env.put(env.text, map) catch unreachable;
 								}
@@ -1322,7 +1322,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							else{
 								scope.append(Let{
 									.name = name.atom,
-									.value = try interpret(ast, scope, val, err, null)
+									.value = try interpret(ast, scope, val, err, null, universe, universe_defs)
 								}) catch unreachable;
 								return expr;
 							}
@@ -1332,7 +1332,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							const val = expr.expr.items[2];
 							if (top_level_macro) |env| {
 								if (ast.env.getPtr(env.text)) |lets| {
-									const eval = try interpret(ast, scope, val, err, null);
+									const eval = try interpret(ast, scope, val, err, null, universe, universe_defs);
 									lets.put(name.atom.text, eval.*) catch unreachable;
 									return expr;
 								}
@@ -1342,12 +1342,12 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							else{
 								for (scope.items) |*let| {
 									if (std.mem.eql(u8, let.name.text, name.atom.text)){
-										let.value = try interpret(ast, scope, val, err, null);
+										let.value = try interpret(ast, scope, val, err, null, universe, universe_defs);
 										return expr;
 									}
 								}
 								if (ast.let.get(name.atom.text)) |_| {
-									const eval = try interpret(ast, scope, val, err, null);
+									const eval = try interpret(ast, scope, val, err, null, universe, universe_defs);
 									ast.let.put(name.atom.text, eval.*) catch unreachable;
 									return expr;
 								}
@@ -1359,8 +1359,8 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							return expr;
 						},
 						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
-							const left = try interpret(ast, scope, expr.expr.items[1], err, null);
-							const right = try interpret(ast, scope, expr.expr.items[1], err, null);
+							const left = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs);
+							const right = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs);
 							if (left.* != .atom){
 								err.append(0, "Expected atom for left side of binary expression\n", .{});
 								return ParseError.UnexpectedToken;
@@ -1373,7 +1373,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 						},
 						UNQUOTE => {
 							const expression = expr.expr.items[1];
-							return try interpret(ast, scope, expression, err, null);
+							return try interpret(ast, scope, expression, err, null, universe, universe_defs);
 						},
 						DEFINE => {
 							if (expr.expr.items.len != 4){
@@ -1425,7 +1425,6 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								.args = args.*,
 								.expression = expression.*
 							}) catch unreachable;
-
 							const empty = ast.mem.create(Expr) catch unreachable;
 							empty.* = Expr{
 								.expr = Buffer(*Expr).init(ast.mem.*)
@@ -1463,27 +1462,27 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 					}
 					var i: u64 = 0;
 					while (i < expr.expr.items.len){
-						i += 1;
 						const save = scope.items.len;
-						expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err, null);
+						expr.expr.items[i] = try interpret(ast, scope, expr.expr.items[i], err, null, universe, universe_defs);
 						scope.items.len = save;
+						i += 1;
 					}
 					head = expr.expr.items[0];
 					if (head.* == .atom){
 						if (ast.defs.getPtr(head.atom.text)) |def| {
-							const ret = try argapply_defs(ast, scope, def, expr, err);
+							const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs);
 							return ret;
 						}
-						else if (ast.universes.getPtr(head.atom.text)) |universe| {
-							return try list_parse_universe_def(ast, universe, expr);
+						else if (ast.universes.getPtr(head.atom.text)) |uni| {
+							return try list_parse_universe_def(ast, uni, expr);
 						}
 					}
 					else if (head.* == .expr){
-						return try lambda(ast, scope, head, expr, err);
+						return try lambda(ast, scope, head, expr, err, universe, universe_defs);
 					}
 				}
 				else if (head.* == .expr){
-					return try lambda(ast, scope, head, expr, err);
+					return try lambda(ast, scope, head, expr, err, universe, universe_defs);
 				}
 			}
 		},
@@ -1491,13 +1490,13 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 			for (scope.items) |let| {
 				if (std.mem.eql(u8, expr.atom.text, let.name.text)){
 					const save = scope.items.len;
-					const new = try interpret(ast, scope, let.value, err, null);
+					const new = try interpret(ast, scope, let.value, err, null, universe, universe_defs);
 					scope.items.len = save;
 					return new;
 				}
 			}
 			if (ast.defs.getPtr(expr.atom.text)) |def| {
-				const ret = try argapply_defs(ast, scope, def, expr, err);
+				const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs);
 				return ret;
 			}
 		},
@@ -1508,7 +1507,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 	return expr;
 }
 
-pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	if (head.expr.items.len > 0){
 		const islambda = head.expr.items[0];
 		if (islambda.* == .atom){
@@ -1526,10 +1525,10 @@ pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *Er
 						}
 						scope.append(Let{
 							.name = argname.atom,
-							.value = try interpret(ast, scope, expr.expr.items[i+1], err, null)
+							.value = try interpret(ast, scope, expr.expr.items[i+1], err, null, universe, universe_defs)
 						}) catch unreachable;
 					}
-					const new = try interpret(ast, scope, head.expr.items[2], err, null);
+					const new = try interpret(ast, scope, head.expr.items[2], err, null, universe, universe_defs);
 					scope.items.len = save;
 					if (expr.expr.items.len > 2){
 						const rest = ast.mem.create(Expr) catch unreachable;
@@ -1538,7 +1537,7 @@ pub fn lambda(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *Er
 						};
 						rest.expr.append(new) catch unreachable;
 						rest.expr.appendSlice(expr.expr.items[head.expr.items[1].expr.items.len+2..]) catch unreachable;
-						return try interpret(ast, scope, rest, err, null);
+						return try interpret(ast, scope, rest, err, null, universe, universe_defs);
 					}
 					return new;
 				}
@@ -1582,7 +1581,7 @@ pub fn binop(ast: *AST, _: TOKEN, _: *Expr, _: *Expr) ParseError!*Expr {
 	return empty;
 }
 
-pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Expr, err: *ErrorLog) ParseError!*Expr {
+pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	const save = scope.items.len;
 	if (def.args == .atom){
 		scope.append(Let{
@@ -1614,16 +1613,17 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 		return ParseError.UnexpectedToken;
 	}
 	if (def.expression) |*expression| {
-		const ret = try interpret(ast, scope, expression, err, null);
+		const ret = try interpret(ast, scope, expression, err, null, universe, universe_defs);
 		scope.items.len = save;
 		if (def.args.expr.items.len < expr.expr.items.len-1){
+			const checked = ret;
 			const new = ast.mem.create(Expr) catch unreachable;
 			new.* = Expr{
 				.expr = Buffer(*Expr).init(ast.mem.*)
 			};
-			new.expr.append(ret) catch unreachable;
+			new.expr.append(checked) catch unreachable;
 			new.expr.appendSlice(expr.expr.items[def.args.expr.items.len+2..]) catch unreachable;
-			return try interpret(ast, scope, ret, err, null);
+			return try interpret(ast, scope, new, err, null, universe, universe_defs);
 		}
 		return ret;
 	}
@@ -1693,9 +1693,10 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// universe interpretations
+//interpretaiton function hooks
 // error
 // canvas
 // input registry
 // tail call
 // runtime errors
+// equality needs to be structural
