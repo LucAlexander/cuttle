@@ -645,7 +645,7 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
 		},
 		UNIVERSE => {
-			return try parse_sub_expression_arity(ast, i, tokens, err, 7);
+			return try parse_sub_expression_arity(ast, i, tokens, err, 8);
 		},
 		ERROR => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 1);
@@ -1037,19 +1037,21 @@ const Let = struct{
 	value: *Expr
 };
 
-pub fn static_interpret(ast: *AST, err: *ErrorLog) ParseError!void {
+pub fn static_interpret(ast: *AST, err: *ErrorLog) ParseError!*Expr{
 	var it = ast.defs.iterator();
 	while (it.next()) |entry| {
 		if (std.mem.eql(u8, "main", entry.key_ptr.*) == false){
-			try walk_def(ast, entry.value_ptr, err, false);
+			_ = try walk_def(ast, entry.value_ptr, err, false);
 		}
 	}
 	if (ast.defs.getPtr("main")) |def| {
-		try walk_def(ast, def, err, true);
+		return try walk_def(ast, def, err, true);
 	}
+	err.append(0, "No entry point for outer kernel\n", .{});
+	return ParseError.UnexpectedToken;
 }
 
-pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog, run: bool) ParseError!void {
+pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog, run: bool) ParseError!*Expr{
 	if (def.args.depth() > 2){
 		err.append(def.name.pos, "Cannot destructure definition args\n", .{});
 		return ParseError.UnexpectedToken;
@@ -1057,6 +1059,7 @@ pub fn walk_def(ast: *AST, def: *Definition, err: *ErrorLog, run: bool) ParseErr
 	if (def.expression) |*expr| {
 		const inner = try walk_expr(ast, expr, err, run, null);
 		def.expression = inner.*;
+		return inner;
 	}
 	else{
 		err.append(def.name.pos, "Cannot find expression for definition\n", .{});
@@ -1148,7 +1151,7 @@ pub fn argmap_descend(argmap: *Map(*Expr), left: *Expr, right: *Expr, err: *Erro
 }
 
 pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Token) ParseError!*Expr {
-	var processed: ?*Expr = null;
+	var processed: *Expr = expr;
 	switch (expr.*){
 		.expr => {
 			var new_expr = ast.mem.create(Expr) catch unreachable;
@@ -1230,13 +1233,13 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 		while (it.next()) |entry| {
 			ast.defs = entry.value_ptr.*;
 			if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
-				_ = try interpret(ast, &scope, processed.?, err, macro, uni, entry.value_ptr);
+				_ = try interpret(ast, &scope, processed, err, macro, uni, entry.value_ptr);
 				scope.clearRetainingCapacity();
 			}
 		}
-		return try interpret(ast, &scope, processed.?, err, macro, null, null);
+		return try interpret(ast, &scope, processed, err, macro, null, null);
 	}
-	return processed.?;
+	return processed;
 }
 
 pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
@@ -1767,7 +1770,7 @@ pub fn main() anyerror!void {
 	if (debug){
 		ast.show();
 	}
-	static_interpret(&ast, &err) catch {
+	const main_expr = static_interpret(&ast, &err) catch {
 		err.handle(contents);
 		return;
 	};
@@ -1775,13 +1778,17 @@ pub fn main() anyerror!void {
 		err.handle(contents);
 		return;
 	}
+	main_expr.show();
 }
 
 //TODO
-// error
 // canvas
 // input registry
 // tail call
 // runtime errors
-// binops
-// equality needs to be structural
+// binops / equality needs to be structural
+// garbage collection/primitive?
+// list to string
+// records
+
+
