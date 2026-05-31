@@ -1154,7 +1154,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 								var argmap = try macro_argmap(ast, &def.args, expr.expr.items[i..expr.expr.items.len], err);
 								if (def.expression)|*expression|{
 									const replaced = distribute_argmap(ast, &argmap, expression);
-									const interpreted = try walk_expr(ast, replaced, err, run, def.env);
+									const interpreted = try walk_expr(ast, replaced, err, true, def.env);
 									new_expr.expr.append(interpreted) catch unreachable;
 								}
 							}
@@ -1163,7 +1163,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 									var argmap = try macro_argmap(ast, &def.args, expr.expr.items[i..i+def.args.expr.items.len], err);
 									if (def.expression)|*expression|{
 										const replaced = distribute_argmap(ast, &argmap, expression);
-										const interpreted = try walk_expr(ast, replaced, err, run, def.env);
+										const interpreted = try walk_expr(ast, replaced, err, true, def.env);
 										new_expr.expr.append(interpreted) catch unreachable;
 									}
 								}
@@ -1192,14 +1192,14 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 					var argmap = try macro_argmap(ast, &def.args, empty.expr.items[0..0], err);
 					if (def.expression)|*expression|{
 						const replaced = distribute_argmap(ast, &argmap, expression);
-						const interpreted = try walk_expr(ast, replaced, err, run, def.env);
+						const interpreted = try walk_expr(ast, replaced, err, true, def.env);
 						processed = interpreted;
 					}
 				}
 				else if  (def.args == .expr){
 					if (def.args.expr.items.len == 0){
 						if (def.expression) |*expression|{
-							const interpreted = try walk_expr(ast, expression, err, run, def.env);
+							const interpreted = try walk_expr(ast, expression, err, true, def.env);
 							processed = interpreted;
 						}
 					}
@@ -1216,6 +1216,14 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 	}
 	if (run){
 		var scope = Buffer(Let).init(ast.mem.*);
+		const data = ast.defs;
+		var it = ast.universes.iterator();
+		while (it.next()) |entry| {
+			ast.defs = entry.value_ptr.*;
+			_ = try interpret(ast, &scope, processed.?, err, macro);
+			scope.clearRetainingCapacity();
+		}
+		ast.defs = data;
 		return try interpret(ast, &scope, processed.?, err, macro);
 	}
 	return processed.?;
