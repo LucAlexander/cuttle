@@ -43,6 +43,7 @@ const LE = 15;
 const GE = 16;
 const EQ = 17;
 const NE = 18;
+const ERROR = 19;
 
 const Token = struct{
 	text: []const u8,
@@ -129,7 +130,7 @@ pub fn tokenize_error_report(er: Error, text: []const u8) void {
 				i += 1;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE, ERROR => {
 				token_count += 1;
 				i += 1;
 				continue;
@@ -201,7 +202,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				}) catch unreachable;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE, ERROR => {
 				tokens.append(Token{
 					.text = text[i..i+1],
 					.tag = c,
@@ -644,6 +645,9 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
 		},
 		UNIVERSE => {
+			return try parse_sub_expression_arity(ast, i, tokens, err, 7);
+		},
+		ERROR => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 		},
 		else => {}
@@ -807,6 +811,9 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
 				expr.expr.append(definition) catch unreachable;
 				continue;
+			},
+			ERROR => {
+				return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 			},
 			else => {}
 		}
@@ -976,6 +983,9 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
 				expr.expr.append(definition) catch unreachable;
 				continue;
+			},
+			ERROR => {
+				return try parse_sub_expression_arity(ast, i, tokens, err, 1);
 			},
 			else => {}
 		}
@@ -1458,6 +1468,24 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							};
 							return empty;
 						},
+						ERROR => {
+							const string = try interpret(ast, scope, expr.expr.items[1], err, null, null, null);
+							if (string.* != .atom){
+								if (nearest_token(string)) |tok| {
+									err.append(tok.pos, "Expected error to be string atom\n", .{});
+								}
+								else{
+									err.append(0, "Expected error to be string atom\n", .{});
+								}
+								return ParseError.UnexpectedToken;
+							}
+							if (string.atom.tag != STR){
+								err.append(string.atom.pos, "Expected error to be string\n", .{});
+								return ParseError.UnexpectedToken;
+							}
+							err.append(string.atom.pos, "{s}\n", .{string.atom.text});
+							return ParseError.UnexpectedToken;
+						},
 						else => {}
 					}
 					var i: u64 = 0;
@@ -1750,10 +1778,10 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-//interpretaiton function hooks
 // error
 // canvas
 // input registry
 // tail call
 // runtime errors
+// binops
 // equality needs to be structural
