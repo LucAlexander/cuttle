@@ -276,11 +276,23 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	return tokens;
 }
 
+const Universe = struct {
+	name: Token,
+	equality: Expr,
+	int: Expr,
+	nat: Expr,
+	float: Expr,
+	str: Expr,
+	lam: Expr,
+	all: Expr
+};
+
 const AST = struct {
 	mem: *const std.mem.Allocator,
 	let: Map(Expr),
 	defs: Map(Definition),
 	macros: Map(Macro),
+	universe_declarations: Map(Universe),
 	universes: Map(Map(Definition)),
 	env: Map(Map(Expr)),
 
@@ -401,6 +413,7 @@ pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) Par
 		.let = Map(Expr).init(mem.*),
 		.defs = Map(Definition).init(mem.*),
 		.macros = Map(Macro).init(mem.*),
+		.universe_declarations = Map(Universe).init(mem.*),
 		.universes = Map(Map(Definition)).init(mem.*),
 		.env = Map(Map(Expr)).init(mem.*)
 	};
@@ -510,6 +523,16 @@ pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Parse
 		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
+	ast.universe_declarations.put(tokens[i.*].text, Universe{
+		.name = tokens[i.*],
+		.equality = try parse_expression(ast, i, tokens, err),
+		.int = try parse_expression(ast, i, tokens, err),
+		.nat = try parse_expression(ast, i, tokens, err),
+		.float = try parse_expression(ast, i, tokens, err),
+		.str = try parse_expression(ast, i, tokens, err),
+		.lam = try parse_expression(ast, i, tokens, err),
+		.all = try parse_expression(ast, i, tokens, err)
+	}) catch unreachable;
 	ast.universes.put(tokens[i.*].text, Map(Definition).init(ast.mem.*)) catch unreachable;
 	i.* += 1;
 }
@@ -1402,7 +1425,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							return empty;
 						},
 						UNIVERSE => {
-							if (expr.expr.items.len != 2){
+							if (expr.expr.items.len != 9){
 								return expr;
 							}
 							if (expr.expr.items[1].* != .atom){
@@ -1411,6 +1434,16 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							if (expr.expr.items[1].atom.tag != IDEN){
 								return expr;
 							}
+							ast.universe_declarations.put(expr.expr.items[1].atom.text, Universe{
+								.name = expr.expr.items[1].atom,
+								.equality = expr.expr.items[2].*,
+								.int = expr.expr.items[3].*,
+								.nat = expr.expr.items[4].*,
+								.float = expr.expr.items[5].*,
+								.str = expr.expr.items[6].*,
+								.lam = expr.expr.items[7].*,
+								.all = expr.expr.items[8].*
+							}) catch unreachable;
 							ast.universes.put(expr.expr.items[1].atom.text, Map(Definition).init(ast.mem.*)) catch unreachable;
 							const empty = ast.mem.create(Expr) catch unreachable;
 							empty.* = Expr{
@@ -1652,8 +1685,6 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// macro environments usage
-//  macro top level lets are global to the environment
 // universe interpretations
 // error
 // canvas
