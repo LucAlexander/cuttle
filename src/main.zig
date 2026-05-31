@@ -1257,7 +1257,6 @@ pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
 	return new;
 }
 
-//TODO pass down expressions pass back up universe interpretations
 pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	switch (expr.*) {
 		.expr => {
@@ -1472,7 +1471,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 					if (head.* == .atom){
 						if (ast.defs.getPtr(head.atom.text)) |def| {
 							const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs);
-							return ret;
+							return check(ast, scope, head.atom.text, ret, err, universe, universe_defs);
 						}
 						else if (ast.universes.getPtr(head.atom.text)) |uni| {
 							return try list_parse_universe_def(ast, uni, expr);
@@ -1489,28 +1488,42 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 		},
 		.atom => {
 			if (universe) |uni| {
-				if (universe_defs.get(expr.atom.text)) |uni_term| {
-					return uni_term.expression;
+				if (universe_defs.?.get(expr.atom.text)) |uni_term| {
+					const wrapped = ast.mem.create(Expr) catch unreachable;
+					wrapped.* = uni_term.expression.?;
+					return wrapped;
 				}
 				switch (expr.atom.tag){
 					INT => {
-						return uni.int;
+						const wrapped = ast.mem.create(Expr) catch unreachable;
+						wrapped.* = uni.int;
+						return wrapped;
 					},
 					NAT => {
-						return uni.nat;
+						const wrapped = ast.mem.create(Expr) catch unreachable;
+						wrapped.* = uni.nat;
+						return wrapped;
 					},
 					STR => {
-						return uni.str;
+						const wrapped = ast.mem.create(Expr) catch unreachable;
+						wrapped.* = uni.str;
+						return wrapped;
 					},
 					LAMBDA => {
-						return uni.lam;
+						const wrapped = ast.mem.create(Expr) catch unreachable;
+						wrapped.* = uni.lam;
+						return wrapped;
 					},
 					FLOAT => {
-						return uni.float;
+						const wrapped = ast.mem.create(Expr) catch unreachable;
+						wrapped.* = uni.float;
+						return wrapped;
 					},
 					else => {}
 				}
-				return uni.all;
+				const wrapped = ast.mem.create(Expr) catch unreachable;
+				wrapped.* = uni.all;
+				return wrapped;
 			}
 			for (scope.items) |let| {
 				if (std.mem.eql(u8, expr.atom.text, let.name.text)){
@@ -1528,6 +1541,24 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 		},
 		.quote => {
 			return expr;
+		}
+	}
+	return expr;
+}
+
+pub fn check(ast: *AST, scope: *Buffer(Let), head: []const u8, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
+	if (universe) |uni| {
+		if (universe_defs.?.getPtr(head)) |reference| {
+			var checker = ast.mem.create(Expr) catch unreachable;
+			checker.* = Expr{
+				.expr = Buffer(*Expr).init(ast.mem.*)
+			};
+			const wrapper = ast.mem.create(Expr) catch unreachable;
+			wrapper.* = uni.equality;
+			checker.expr.append(wrapper) catch unreachable;
+			checker.expr.append(expr) catch unreachable;
+			checker.expr.append(&reference.expression.?) catch unreachable;
+			return try interpret(ast, scope, checker, err, null, null, null);
 		}
 	}
 	return expr;
