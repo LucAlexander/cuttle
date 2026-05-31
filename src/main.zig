@@ -1257,6 +1257,7 @@ pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
 	return new;
 }
 
+//TODO pass down expressions pass back up universe interpretations
 pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!*Expr {
 	switch (expr.*) {
 		.expr => {
@@ -1487,6 +1488,30 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 			}
 		},
 		.atom => {
+			if (universe) |uni| {
+				if (universe_defs.get(expr.atom.text)) |uni_term| {
+					return uni_term.expression;
+				}
+				switch (expr.atom.tag){
+					INT => {
+						return uni.int;
+					},
+					NAT => {
+						return uni.nat;
+					},
+					STR => {
+						return uni.str;
+					},
+					LAMBDA => {
+						return uni.lam;
+					},
+					FLOAT => {
+						return uni.float;
+					},
+					else => {}
+				}
+				return uni.all;
+			}
 			for (scope.items) |let| {
 				if (std.mem.eql(u8, expr.atom.text, let.name.text)){
 					const save = scope.items.len;
@@ -1499,6 +1524,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 				const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs);
 				return ret;
 			}
+			return expr;
 		},
 		.quote => {
 			return expr;
