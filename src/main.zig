@@ -1792,6 +1792,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					}
 					calling.items.len = save_calling;
 				}
+				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
 			}
 		}
 		else{
@@ -1819,6 +1820,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				}
 				calling.items.len = save_calling;
 			}
+			ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
 		}
 		scope.items.len = save;
 		if (ret) |r| {
@@ -1904,8 +1906,7 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// tail call
-// garbage collection/primitive?
+// garbage collection
 // binops / equality needs to be structural
 // runtime errors
 // records
