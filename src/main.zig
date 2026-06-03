@@ -298,6 +298,11 @@ pub fn restore_from_allocator(allocator: *const std.mem.Allocator, checkpoint: u
     fba.end_index = checkpoint;
 }
 
+pub fn reset_from_allocator(allocator: *const std.mem.Allocator) void {
+	const fba: *std.heap.FixedBufferAllocator = @ptrCast(@alignCast(allocator.ptr));
+	fba.reset();
+}
+
 const AST = struct {
 	mem: *const std.mem.Allocator,
 	tmp: *const std.mem.Allocator,
@@ -1310,10 +1315,10 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								var last: ?ExprTail = null;
 								while (i < expr.expr.items.len){
 									if (i == expr.expr.items.len-1){
-										last = try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
+										last = try interpret(ast, scope, expr.expr.items[i], err, null, universe, universe_defs, calling_token);
 									}
 									else{
-										last = try interpret(ast, scope, expr, err, null, universe, universe_defs, null);
+										last = try interpret(ast, scope, expr.expr.items[i], err, null, universe, universe_defs, null);
 									}
 									i += 1;
 								}
@@ -1768,6 +1773,9 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				return ExprTail{.expr=expr};
 			}
 		}
+		else if (def.args.expr.items.len > 0){
+			return ExprTail{.expr = expr};
+		}
 	}
 	else if (def.args == .quote){
 		err.append(def.name.pos, "cannot quote args\n", .{});
@@ -1782,6 +1790,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
 				restore_from_allocator(ast.mem, alloc_ptr);
 				ret.?.expr = deep_copy(ast.mem, tmp_copy);
+				reset_from_allocator(ast.tmp);
 			}
 			else {
 				if (calling_token) |calling| {
@@ -1802,6 +1811,8 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 						const tmp_copy = deep_copy(ast.tmp, ret.?.tail.expr);
 						restore_from_allocator(ast.mem, alloc_ptr);
 						ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
+						reset_from_allocator(ast.tmp);
+						scope.items.len = save;
 						if (std.mem.eql(u8, ret.?.tail.call.text, def.name.text)) {
 							ret = try interpret(ast, scope, ret.?.tail.expr, err, null, universe, universe_defs, calling_token);
 						}
@@ -1812,6 +1823,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
 					restore_from_allocator(ast.mem, alloc_ptr);
 					ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
+					reset_from_allocator(ast.tmp);
 					calling.items.len = save_calling;
 				}
 				else{
@@ -1819,6 +1831,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
 					restore_from_allocator(ast.mem, alloc_ptr);
 					ret.?.expr = deep_copy(ast.mem, tmp_copy);
+					reset_from_allocator(ast.tmp);
 				}
 			}
 		}
@@ -1841,6 +1854,8 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					const tmp_copy = deep_copy(ast.tmp, ret.?.tail.expr);
 					restore_from_allocator(ast.mem, alloc_ptr);
 					ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
+					reset_from_allocator(ast.tmp);
+					scope.items.len = save;
 					if (std.mem.eql(u8, ret.?.tail.call.text, def.name.text)) {
 						ret = try interpret(ast, scope, ret.?.tail.expr, err, null, universe, universe_defs, calling_token);
 					}
@@ -1852,6 +1867,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
 				restore_from_allocator(ast.mem, alloc_ptr);
 				ret.?.expr = deep_copy(ast.mem, tmp_copy);
+				reset_from_allocator(ast.tmp);
 			}
 			else{
 				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, null);
@@ -1974,10 +1990,11 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// garbage collection
 // binops / equality needs to be structural
 // runtime errors
 // records
 // canvas
 // input registry
 // list to string
+
+//deep copy scope and calling?
