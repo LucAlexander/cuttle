@@ -288,8 +288,19 @@ const Universe = struct {
 	all: Expr
 };
 
+pub fn checkpoint_from_allocator(allocator: *const std.mem.Allocator) usize {
+    const fba: *std.heap.FixedBufferAllocator = @ptrCast(@alignCast(allocator.ptr));
+    return fba.end_index;
+}
+
+pub fn restore_from_allocator(allocator: *const std.mem.Allocator, checkpoint: usize) void {
+    const fba: *std.heap.FixedBufferAllocator = @ptrCast(@alignCast(allocator.ptr));
+    fba.end_index = checkpoint;
+}
+
 const AST = struct {
 	mem: *const std.mem.Allocator,
+	tmp: *const std.mem.Allocator,
 	let: Map(Expr),
 	defs: Map(Definition),
 	macros: Map(Macro),
@@ -408,9 +419,10 @@ const ParseError = error {
 	UnexpectedToken
 };
 
-pub fn parse(mem: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
+pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
 	var ast = AST{
 		.mem = mem,
+		.tmp = tmp,
 		.let = Map(Expr).init(mem.*),
 		.defs = Map(Definition).init(mem.*),
 		.macros = Map(Macro).init(mem.*),
@@ -1762,10 +1774,14 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 		return ParseError.UnexpectedToken;
 	}
 	if (def.expression) |*expression| {
+		const alloc_ptr = checkpoint_from_allocator(ast.mem);
 		var ret: ?ExprTail = null;
 		if (expr.* == .expr){
 			if (def.args.expr.items.len < expr.expr.items.len-1){
 				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, null);
+				const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
+				restore_from_allocator(ast.mem, alloc_ptr);
+				ret.?.expr = deep_copy(ast.mem, tmp_copy);
 			}
 			else {
 				if (calling_token) |calling| {
@@ -1783,6 +1799,9 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					calling.append(def.name) catch unreachable;
 					ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
 					while (ret.? == .tail){
+						const tmp_copy = deep_copy(ast.tmp, ret.?.tail.expr);
+						restore_from_allocator(ast.mem, alloc_ptr);
+						ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
 						if (std.mem.eql(u8, ret.?.tail.call.text, def.name.text)) {
 							ret = try interpret(ast, scope, ret.?.tail.expr, err, null, universe, universe_defs, calling_token);
 						}
@@ -1790,9 +1809,17 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 							break;
 						}
 					}
+					const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
+					restore_from_allocator(ast.mem, alloc_ptr);
+					ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
 					calling.items.len = save_calling;
 				}
-				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
+				else{
+					ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, null);
+					const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
+					restore_from_allocator(ast.mem, alloc_ptr);
+					ret.?.expr = deep_copy(ast.mem, tmp_copy);
+				}
 			}
 		}
 		else{
@@ -1811,6 +1838,9 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				calling.append(def.name) catch unreachable;
 				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
 				while (ret.? == .tail){
+					const tmp_copy = deep_copy(ast.tmp, ret.?.tail.expr);
+					restore_from_allocator(ast.mem, alloc_ptr);
+					ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
 					if (std.mem.eql(u8, ret.?.tail.call.text, def.name.text)) {
 						ret = try interpret(ast, scope, ret.?.tail.expr, err, null, universe, universe_defs, calling_token);
 					}
@@ -1819,8 +1849,13 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					}
 				}
 				calling.items.len = save_calling;
+				const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
+				restore_from_allocator(ast.mem, alloc_ptr);
+				ret.?.expr = deep_copy(ast.mem, tmp_copy);
 			}
-			ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, calling_token);
+			else{
+				ret = try interpret(ast, scope, expression, err, null, universe, universe_defs, null);
+			}
 		}
 		scope.items.len = save;
 		if (ret) |r| {
@@ -1837,6 +1872,36 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 				}
 			}
 			return r;
+		}
+	}
+	unreachable;
+}
+
+pub fn deep_copy(mem: *const std.mem.Allocator, expr: *Expr) *Expr {
+	switch (expr.*){
+		.expr => {
+			const appl = mem.create(Expr) catch unreachable;
+			appl.* = Expr{
+				.expr = Buffer(*Expr).init(mem.*)
+			};
+			for (expr.expr.items) |item| {
+				appl.expr.append(deep_copy(mem, item)) catch unreachable;
+			}
+			return appl;
+		},
+		.atom => {
+			const atom = mem.create(Expr) catch unreachable;
+			atom.* = Expr{
+				.atom = expr.atom
+			};
+			return atom;
+		},
+		.quote => {
+			const quote = mem.create(Expr) catch unreachable;
+			quote.* = Expr{
+				.quote = deep_copy(mem, expr.quote)
+			};
+			return quote;
 		}
 	}
 	unreachable;
@@ -1864,6 +1929,9 @@ pub fn main() anyerror!void {
 	const main_buffer = heap.alloc(u8, 0x1000000) catch unreachable;
 	var main_mem_fixed = std.heap.FixedBufferAllocator.init(main_buffer);
 	var main_mem = main_mem_fixed.allocator();
+	const temp_buffer = heap.alloc(u8, 0x100000) catch unreachable;
+	var temp_mem_fixed = std.heap.FixedBufferAllocator.init(temp_buffer);
+	var temp_mem = temp_mem_fixed.allocator();
 	const args = try std.process.argsAlloc(main_mem);
 	if (args.len == 1){
 		std.debug.print("-h for help\n", .{});
@@ -1883,7 +1951,7 @@ pub fn main() anyerror!void {
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
 	var err = ErrorLog.init(&main_mem);
-	var ast = parse(&main_mem, tokens.items, &err) catch {
+	var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
 		err.handle(contents);
 		return;
 	};
@@ -1913,4 +1981,3 @@ pub fn main() anyerror!void {
 // canvas
 // input registry
 // list to string
-
