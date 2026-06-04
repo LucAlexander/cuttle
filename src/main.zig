@@ -131,7 +131,23 @@ pub fn tokenize_error_report(er: Error, text: []const u8) void {
 				i += 1;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
+			'<' => {
+				i += 1;
+				if (text[i] == '='){
+					i += 1;
+				}
+				token_count += 1;
+				continue;
+			},
+			'>' => {
+				i += 1;
+				if (text[i] == '='){
+					i += 1;
+				}
+				token_count += 1;
+				continue;
+			},
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, OPEN, CLOSE => {
 				token_count += 1;
 				i += 1;
 				continue;
@@ -205,7 +221,47 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				}) catch unreachable;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
+			'<' => {
+				if (text[i+1] == '='){
+					tokens.append(Token{
+						.text = text[i..i+2],
+						.tag = LE,
+						.pos = tokens.items.len,
+						.value = null
+					}) catch unreachable;
+					i += 1;
+					continue;
+				}
+				tokens.append(Token{
+					.text = text[i..i+1],
+					.tag = LT,
+					.pos = tokens.items.len,
+					.value = null
+				}) catch unreachable;
+				i += 1;
+				continue;
+			},
+			'>' => {
+				if (text[i+1] == '='){
+					tokens.append(Token{
+						.text = text[i..i+2],
+						.tag = GE,
+						.pos = tokens.items.len,
+						.value = null
+					}) catch unreachable;
+					i += 1;
+					continue;
+				}
+				tokens.append(Token{
+					.text = text[i..i+1],
+					.tag = GT,
+					.pos = tokens.items.len,
+					.value = null
+				}) catch unreachable;
+				i += 1;
+				continue;
+			},
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, OPEN, CLOSE => {
 				tokens.append(Token{
 					.text = text[i..i+1],
 					.tag = c,
@@ -1510,7 +1566,7 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 						},
 						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
 							const left = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
-							const right = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
+							const right = try interpret(ast, scope, expr.expr.items[2], err, null, universe, universe_defs, null);
 							if (left.expr.* != .atom){
 								err.append(0, "Expected atom for left side of binary expression\n", .{});
 								return ParseError.UnexpectedToken;
@@ -1671,6 +1727,16 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								return try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
 							}
 						}
+						if (ast.let.getPtr(head.atom.text)) |let| {
+							const save = scope.items.len;
+							const new = try interpret(ast, scope, let, err, null, universe, universe_defs, calling_token);
+							if (new == .tail){
+								return new;
+							}
+							head.* = new.expr.*;
+							scope.items.len = save;
+							return try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
+						}
 						if (ast.defs.getPtr(head.atom.text)) |def| {
 							const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs, calling_token);
 							if (ret == .tail){
@@ -1755,6 +1821,12 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 					scope.items.len = save;
 					return new;
 				}
+			}
+			if (ast.let.getPtr(expr.atom.text)) |let| {
+				const save = scope.items.len;
+				const new = try interpret(ast, scope, let, err, null, universe, universe_defs, calling_token);
+				scope.items.len = save;
+				return new;
 			}
 			if (ast.defs.getPtr(expr.atom.text)) |def| {
 				const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs, calling_token);
@@ -2075,7 +2147,16 @@ pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
 	}
 	if (left.atom.tag == FLOAT or right.atom.tag == FLOAT){
 		const l: f64 = left.atom.value.?.float;
-		const r: f64 = right.atom.value.?.float;
+		var r: f64 = 0;
+		if (right.atom.value.? == .int){
+			r = @floatFromInt(right.atom.value.?.int);
+		}
+		else if (right.atom.value.? == .nat){
+			r = @floatFromInt(right.atom.value.?.nat);
+		}
+		else{
+			r = right.atom.value.?.float;
+		}
 		const v = binop_type(f64, op, l, r);
 		const ret = ast.mem.create(Expr) catch unreachable;
 		const buf = ast.mem.alloc(u8, 20) catch unreachable;
@@ -2094,7 +2175,16 @@ pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
 	}
 	else if (left.atom.tag == INT or right.atom.tag == INT){
 		const l: i64 = left.atom.value.?.int;
-		const r: i64 = right.atom.value.?.int;
+		var r: i64 = 0;
+		if (right.atom.value.? == .int){
+			r = right.atom.value.?.int;
+		}
+		else if (right.atom.value.? == .nat){
+			r = @intCast(right.atom.value.?.nat);
+		}
+		else{
+			r = @intFromFloat(right.atom.value.?.float);
+		}
 		const v = binop_type(i64, op, l, r);
 		const ret = ast.mem.create(Expr) catch unreachable;
 		const buf = ast.mem.alloc(u8, 20) catch unreachable;
@@ -2112,7 +2202,16 @@ pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
 		return ret;
 	}
 	const l: u64 = left.atom.value.?.nat;
-	const r: u64 = right.atom.value.?.nat;
+	var r: u64 = 0;
+	if (right.atom.value.? == .int){
+		r = @intCast(right.atom.value.?.int);
+	}
+	else if (right.atom.value.? == .nat){
+		r = right.atom.value.?.nat;
+	}
+	else{
+		r = @intFromFloat(right.atom.value.?.float);
+	}
 	const v = binop_type(u64, op, l, r);
 	const ret = ast.mem.create(Expr) catch unreachable;
 	const buf = ast.mem.alloc(u8, 20) catch unreachable;
@@ -2529,3 +2628,7 @@ pub fn main() anyerror!void {
 // input registry
 
 // note environment with vim 
+
+// Top-level universe parsing appears misaligned: the parser does not advance past the universe name before reading universe fields.
+// Parenthesized runtime universe parsing appears to use the wrong arity in at least one parser path.
+// Runtime macro parsing and runtime macro interpretation disagree about expected expression length.
