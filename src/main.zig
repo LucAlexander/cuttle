@@ -44,6 +44,7 @@ const GE = 16;
 const EQ = 17;
 const NE = 18;
 const ERROR = 19;
+const RECORD = 20;
 
 const Token = struct{
 	text: []const u8,
@@ -130,7 +131,7 @@ pub fn tokenize_error_report(er: Error, text: []const u8) void {
 				i += 1;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE, ERROR => {
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
 				token_count += 1;
 				i += 1;
 				continue;
@@ -180,6 +181,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put(">=", GE ) catch unreachable;
 	tokmap.put("==", EQ ) catch unreachable;
 	tokmap.put("!=", NE ) catch unreachable;
+	tokmap.put("error", ERROR) catch unreachable;
 	while (i < text.len){
 		const c = text[i];
 		switch(c){
@@ -202,7 +204,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 				}) catch unreachable;
 				continue;
 			},
-			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE, ERROR => {
+			HOLE, QUOTE, UNQUOTE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT, OPEN, CLOSE => {
 				tokens.append(Token{
 					.text = text[i..i+1],
 					.tag = c,
@@ -312,6 +314,7 @@ const AST = struct {
 	universe_declarations: Map(Universe),
 	universes: Map(Map(Definition)),
 	env: Map(Map(Expr)),
+	records: Map(Record),
 
 	pub fn show(self: *AST) void {
 		var it = self.let.iterator();
@@ -371,6 +374,11 @@ const Definition = struct {
 			expr.show();
 		}
 	}
+};
+
+const Record = struct {
+	name: Token,
+	fields: Buffer(Token)
 };
 
 const Expr = union(enum){
@@ -433,7 +441,8 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		.macros = Map(Macro).init(mem.*),
 		.universe_declarations = Map(Universe).init(mem.*),
 		.universes = Map(Map(Definition)).init(mem.*),
-		.env = Map(Map(Expr)).init(mem.*)
+		.env = Map(Map(Expr)).init(mem.*),
+		.records = Map(Record).init(mem.*)
 	};
 	var i: u64 = 0;
 	while (i<tokens.len){
@@ -449,6 +458,9 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		else if (tokens[i].tag == UNIVERSE){
 			try parse_universe(&ast, &i, tokens, err);
 		}
+		else if (tokens[i].tag == RECORD){
+			try parse_record(&ast, &i, tokens, err);
+		}
 		else if (ast.universes.getPtr(tokens[i].text)) |universe| {
 			try parse_universe_def(&ast, &i, tokens, tokens[i], universe, err);
 		}
@@ -458,6 +470,43 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		}
 	}
 	return ast;
+}
+
+pub fn parse_record(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
+	i.* += 1;
+	if (tokens[i.*].tag != IDEN){
+		err.append(i.*, "Expected identifier for record name, found {s}\n", .{tokens[i.*].text});
+		return ParseError.UnexpectedToken;
+	}
+	if (ast.records.get(tokens[i.*].text)) |_| {
+		err.append(i.*, "Duplicate identifier for name of record, found {s}\n", .{tokens[i.*].text});
+		return ParseError.UnexpectedToken;
+	}
+	const name = tokens[i.*];
+	i.* += 1;
+	const fields = try parse_expression(ast, i, tokens, err);
+	if (fields == .atom){
+		var rec = Record{
+			.name = name,
+			.fields = Buffer(Token).init(ast.mem.*)
+		};
+		rec.fields.append(fields.atom) catch unreachable;
+		ast.records.put(name.text, rec) catch unreachable;
+		return;
+	}
+	var rec = Record{
+		.name = name,
+		.fields = Buffer(Token).init(ast.mem.*)
+	};
+	for (fields.expr.items) |item| {
+		if (item.* == .expr){
+			err.append(i.*, "Expected atom for field in record {s}\n", .{name.text});
+			return ParseError.UnexpectedToken;
+		}
+		rec.fields.append(item.atom) catch unreachable;
+	}
+	ast.records.put(name.text, rec) catch unreachable;
+	return;
 }
 
 pub fn parse_let(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
@@ -2245,11 +2294,8 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// binops / equality needs to be structural
-// runtime errors
-// list to string
 // records
 // canvas
 // input registry
+// list to string
 
-//deep copy scope and calling?
