@@ -1,0 +1,31 @@
+define id () lambda (x) x
+
+let int 0
+let nat 1
+let flt 2
+let str 3
+
+universe type
+	lambda (a b) == a b
+	(Atom int)
+	(Atom nat)
+	(Atom flt)
+	(Atom str)
+	(Term Any Any)
+	(Any)
+
+type Term (left right)
+	lambda (arg)
+		if == arg left
+			right
+			error "type error"
+
+type Any () id
+
+type Atom (elem) elem
+
+type void () ()
+
+type main () (Atom int)
+define main () 1
+
