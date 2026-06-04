@@ -662,7 +662,9 @@ pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Parse
 		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	ast.universe_declarations.put(tokens[i.*].text, Universe{
+	const name = tokens[i.*].text;
+	i.* += 1;
+	ast.universe_declarations.put(name, Universe{
 		.name = tokens[i.*],
 		.equality = try parse_expression(ast, i, tokens, err),
 		.int = try parse_expression(ast, i, tokens, err),
@@ -780,7 +782,7 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
 		},
 		MACRO => {
-			return try parse_sub_expression_arity(ast, i, tokens, err, 3);
+			return try parse_sub_expression_arity(ast, i, tokens, err, 4);
 		},
 		UNIVERSE => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 8);
@@ -940,13 +942,13 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			},
 			MACRO => {
 				const definition = ast.mem.create(Expr) catch unreachable;
-				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 4);
 				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			UNIVERSE => {
 				const definition = ast.mem.create(Expr) catch unreachable;
-				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 8);
 				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
@@ -1112,13 +1114,13 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 			},
 			MACRO => {
 				const definition = ast.mem.create(Expr) catch unreachable;
-				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 3);
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 4);
 				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
 			UNIVERSE => {
 				const definition = ast.mem.create(Expr) catch unreachable;
-				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
+				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 8);
 				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
