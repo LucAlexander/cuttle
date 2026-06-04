@@ -531,7 +531,7 @@ macro when _ (cond body)
 
 A macro receives unevaluated expression structure, builds an argument map, substitutes arguments into its body, and then walks/evaluates the expanded body.
 
-The `env` field names the macro environment. `_` may be used when no named environment is required.
+The `env` field names the macro environment. `_` may be used when no named environment is required. Environments have their own let state which persists between macro invocations of the same environment. Macros essentially instantiate an entire program context.
 
 Macro arguments may be a flat or structured expression pattern:
 
