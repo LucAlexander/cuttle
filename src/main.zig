@@ -1389,6 +1389,17 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								}
 							}
 						},
+						HEAD => {
+							return try interpret(ast, scope, expr.expr.items[0], err, null, universe, universe_defs, null);
+						},
+						TAIL => {
+							const tail = ast.mem.create(Expr) catch unreachable;
+							tail.* = Expr{
+								.expr = Buffer(*Expr).init(ast.mem.*)
+							};
+							tail.expr.appendSlice(expr.expr.items[1..]) catch unreachable;
+							return try interpret(ast, scope, tail, err, null, universe, universe_defs, null);
+						},
 						IF => {
 							const cond = expr.expr.items[1];
 							const cons = expr.expr.items[2];
@@ -2413,3 +2424,4 @@ pub fn main() anyerror!void {
 
 // note environment with vim 
 
+//head and tail are forgotten
