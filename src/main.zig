@@ -1728,13 +1728,242 @@ pub fn list_parse_universe_def(ast: *AST, universe: *Map(Definition), expr: *Exp
 	return empty;
 }
 
-pub fn binop(ast: *AST, _: TOKEN, _: *Expr, _: *Expr) ParseError!*Expr {
-	//TODO
-	const empty = ast.mem.create(Expr) catch unreachable;
-	empty.* = Expr{
-		.expr = Buffer(*Expr).init(ast.mem.*)
+pub fn binop_type(comptime T: type, op: TOKEN, l: T, r: T) T {
+	var v:T = 0;
+	switch (op){
+		LE => {
+			if (l <= r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		LT => {
+			if (l < r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		GE => {
+			if (l >= r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		GT => {
+			if (l > r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		ADD => {
+			v = l + r;
+		},
+		SUB => {
+			v = l - r;
+		},
+		MUL => {
+			v = l * r;
+		},
+		DIV => {
+			if (r == 0){
+				unreachable;
+			}
+			v = @divExact(l, r);
+		},
+		MOD => {
+			if (r == 0){
+				unreachable;
+			}
+			v = @mod(l, r);
+		},
+		AND => {
+			if ((l != 0) and (r != 0)){
+				return 1;
+			}
+			return 0;
+		},
+		OR => {
+			if ((l != 0) or (r != 0)) {
+				return 1;
+			}
+			return 0;
+		},
+		XOR => {
+			if ((l != 0 and r == 0) or (l == 0 and r != 0)){
+				return 1;
+			}
+			return 0;
+		},
+		else => {
+			unreachable;
+		}
+	}
+	return v;
+}
+
+pub fn structural_eq(left: *Expr, right: *Expr) bool {
+	switch (left.*){
+		.expr => {
+			if (right.* != .expr){
+				return false;
+			}
+			if (left.expr.items.len != right.expr.items.len){
+				return false;
+			}
+			for (left.expr.items, right.expr.items) |l, r| {
+				if (!structural_eq(l, r)){
+					return false;
+				}
+			}
+			return true;
+		},
+		.atom => {
+			if (right.* != .atom){
+				return false;
+			}
+			if (!std.mem.eql(u8, left.atom.text, right.atom.text)){
+				return false;
+			}
+			return true;
+		},
+		.quote => {
+			if (right.* != .quote){
+				return false;
+			}
+			return structural_eq(left.quote, right.quote);
+		}
+	}
+	unreachable;
+}
+
+pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
+	if (op == EQ){
+		if (structural_eq(left, right)){
+			const ret = ast.mem.create(Expr) catch unreachable;
+			const buf = ast.mem.alloc(u8, 20) catch unreachable;
+			const s = std.fmt.bufPrint(buf, "{}", .{1}) catch unreachable;
+			ret.* = Expr{
+				.atom = Token{
+					.tag = NAT,
+					.text = s,
+					.value = .{
+						.nat = 1
+					},
+					.pos = 0
+				}
+			};
+			return ret;
+		}
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{0}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = NAT,
+				.text = s,
+				.value = .{
+					.nat = 0
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	else if (op == NE){
+		if (!structural_eq(left, right)){
+			const ret = ast.mem.create(Expr) catch unreachable;
+			const buf = ast.mem.alloc(u8, 20) catch unreachable;
+			const s = std.fmt.bufPrint(buf, "{}", .{1}) catch unreachable;
+			ret.* = Expr{
+				.atom = Token{
+					.tag = NAT,
+					.text = s,
+					.value = .{
+						.nat = 1
+					},
+					.pos = 0
+				}
+			};
+			return ret;
+		}
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{0}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = NAT,
+				.text = s,
+				.value = .{
+					.nat = 0
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	if (left.atom.tag == FLOAT or right.atom.tag == FLOAT){
+		const l: f64 = left.atom.value.?.float;
+		const r: f64 = right.atom.value.?.float;
+		const v = binop_type(f64, op, l, r);
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = FLOAT,
+				.text = s,
+				.value = .{
+					.float = v
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	else if (left.atom.tag == INT or right.atom.tag == INT){
+		const l: i64 = left.atom.value.?.int;
+		const r: i64 = right.atom.value.?.int;
+		const v = binop_type(i64, op, l, r);
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = INT,
+				.text = s,
+				.value = .{
+					.int = v
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	const l: u64 = left.atom.value.?.nat;
+	const r: u64 = right.atom.value.?.nat;
+	const v = binop_type(u64, op, l, r);
+	const ret = ast.mem.create(Expr) catch unreachable;
+	const buf = ast.mem.alloc(u8, 20) catch unreachable;
+	const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+	ret.* = Expr{
+		.atom = Token{
+			.tag = NAT,
+			.text = s,
+			.value = .{
+				.nat = v
+			},
+			.pos = 0
+		}
 	};
-	return empty;
+	return ret;
 }
 
 const ExprTail = union(enum){
@@ -2018,9 +2247,9 @@ pub fn main() anyerror!void {
 //TODO
 // binops / equality needs to be structural
 // runtime errors
+// list to string
 // records
 // canvas
 // input registry
-// list to string
 
 //deep copy scope and calling?
