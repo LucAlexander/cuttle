@@ -353,7 +353,7 @@ const AST = struct {
 		}
 	}
 
-	pub fn write(out: std.fs.File) void {
+	pub fn write(_: std.fs.File) void {
 		//TODO faithful ordered write
 	}
 };
@@ -1631,6 +1631,24 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 						},
 						else => {}
 					}
+					if (expr.expr.items.len == 2){
+						if (expr.expr.items[1].* == .atom){
+							const save = scope.items.len;
+							const eval = try interpret(ast, scope, expr.expr.items[0], err, null, universe, universe_defs, null);
+							expr.expr.items[0] = eval.expr;
+							scope.items.len = save;
+							head = expr.expr.items[0];
+							if (head.* == .expr){
+								if (head.expr.items.len != 0){
+									if (head.expr.items[0].* == .atom){
+										if (ast.records.getPtr(head.expr.items[0].atom.text)) |_| {
+											return try record_access(ast, scope, head, expr, err, universe, universe_defs);
+										}
+									}
+								}
+							}
+						}
+					}
 					var i: u64 = 0;
 					while (i < expr.expr.items.len){
 						const save = scope.items.len;
@@ -1781,7 +1799,7 @@ pub fn record_access(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, e
 				return ParseError.UnexpectedToken;
 			}
 			else{
-				err.append(head.expr.items[0].atom.pos, "Expected field name for recorda ccess\n", .{});
+				err.append(head.expr.items[0].atom.pos, "Expected field name for record access\n", .{});
 				return ParseError.UnexpectedToken;
 			}
 		}
@@ -2341,6 +2359,11 @@ pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
 	return contents;
 }
 
+const PollStamp = struct {
+    mtime: i128,
+    size: u64,
+};
+
 pub fn get_stamp(path: []const u8) !PollStamp {
     const stat = try std.fs.cwd().statFile(path);
     return .{
@@ -2395,84 +2418,84 @@ pub fn main() anyerror!void {
 		return;
 	}
 	if (args.len == 3){
-		if (std.mem.eql(u8, args[2], "-i") == false){
-			std.debug.print("-h for help\n", .{});
-			return;
-		}
-		const filename = args[1];
-		const contents = try get_contents(&main_mem, filename);
-		const tokens = tokenize(&main_mem, contents);
-		var err = ErrorLog.init(&main_mem);
-		var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
-			err.handle(contents);
-			return;
-		};
-		if (err.log.items.len != 0){
-			err.handle(contents);
-			return;
-		}
-		if (debug){
-			ast.show();
-		}
-		const main_expr = static_interpret(&ast, &err) catch {
-			err.handle(contents);
-			return;
-		};
-		if (err.log.items.len != 0){
-			err.handle(contents);
-			return;
-		}
-		const buf = ast.mem.alloc(u8, 40) catch unreachable;
-		const s = std.fmt.bufPrint(buf, "{s}.live", .{filename}) catch unreachable;
-		var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
-			std.debug.print("Error creating file: {s}\n", .{s});
-		};
-		ast.write(out);
-		out.close();
-		var vim_argv = [_][]const u8{ "vim", "-n", path };
-		var last_stamp = try get_stamp(s);
-		var child = try spawn_vim(main_mem, vim_argv[0..]);
-		defer stop_child(&child) catch {};
-		const poll_interval_ns = 250 * std.time.ns_per_ms;
-		while (true) {
-			std.time.sleep(poll_interval_ns);
-			const new_stamp = get_stamp(s) catch |err| switch (err) {
-				error.FileNotFound => continue,
-				else => return err,
-			};
-			if (changed(last_stamp, new_stamp)) {
-				last_stamp = new_stamp;
-				try stop_child(&child);
-				std.time.sleep(50 * std.time.ns_per_ms);
-				const recontents = try get_contents(&main_mem, s);
-				const retokens = tokenize(&main_mem, recontents);
-				ast = parse(&main_mem, &temp_mem, retokens.items, &err) catch {
-					err.handle(recontents);
-					return;
-				};
-				if (err.log.items.len != 0){
-					err.handle(recontents);
-					return;
-				}
-				if (debug){
-					ast.show();
-				}
-				const main_expr = static_interpret(&ast, &err) catch {
-					err.handle(recontents);
-					return;
-				};
-				if (err.log.items.len != 0){
-					err.handle(recontents);
-					return;
-				}
-				var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
-					std.debug.print("Error creating file: {s}\n", .{s});
-				};
-				ast.write(out);
-				out.close();
-				child = try spawn_vim(main_mem, vim_argv[0..]);
-			}
-		}
+		//if (std.mem.eql(u8, args[2], "-i") == false){
+			//std.debug.print("-h for help\n", .{});
+			//return;
+		//}
+		//const filename = args[1];
+		//const contents = try get_contents(&main_mem, filename);
+		//const tokens = tokenize(&main_mem, contents);
+		//var err = ErrorLog.init(&main_mem);
+		//var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
+			//err.handle(contents);
+			//return;
+		//};
+		//if (err.log.items.len != 0){
+			//err.handle(contents);
+			//return;
+		//}
+		//if (debug){
+			//ast.show();
+		//}
+		//_ = static_interpret(&ast, &err) catch {
+			//err.handle(contents);
+			//return;
+		//};
+		//if (err.log.items.len != 0){
+			//err.handle(contents);
+			//return;
+		//}
+		//const buf = ast.mem.alloc(u8, 40) catch unreachable;
+		//const s = std.fmt.bufPrint(buf, "{s}.live", .{filename}) catch unreachable;
+		//var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
+			//std.debug.print("Error creating file: {s}\n", .{s});
+		//};
+		//ast.write(out);
+		//out.close();
+		//var vim_argv = [_][]const u8{ "vim", "-n", s};
+		//var last_stamp = try get_stamp(s);
+		//var child = try spawn_vim(main_mem, vim_argv[0..]);
+		//defer stop_child(&child) catch {};
+		//const poll_interval_ns = 250 * std.time.ns_per_ms;
+		//while (true) {
+			//std.time.sleep(poll_interval_ns);
+			//const new_stamp = get_stamp(s) catch |e| switch (e) {
+				//error.FileNotFound => continue,
+				//else => return e,
+			//};
+			//if (changed(last_stamp, new_stamp)) {
+				//last_stamp = new_stamp;
+				//try stop_child(&child);
+				//std.time.sleep(50 * std.time.ns_per_ms);
+				//const recontents = try get_contents(&main_mem, s);
+				//const retokens = tokenize(&main_mem, recontents);
+				//ast = parse(&main_mem, &temp_mem, retokens.items, &err) catch {
+					//err.handle(recontents);
+					//return;
+				//};
+				//if (err.log.items.len != 0){
+					//err.handle(recontents);
+					//return;
+				//}
+				//if (debug){
+					//ast.show();
+				//}
+				//_ = static_interpret(&ast, &err) catch {
+					//err.handle(recontents);
+					//return;
+				//};
+				//if (err.log.items.len != 0){
+					//err.handle(recontents);
+					//return;
+				//}
+				//out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
+					//std.debug.print("Error creating file: {s}\n", .{s});
+				//};
+				//ast.write(out);
+				//out.close();
+				//child = try spawn_vim(main_mem, vim_argv[0..]);
+			//}
+		//}
 		return;
 	}
 	const filename = args[1];
