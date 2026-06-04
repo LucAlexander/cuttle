@@ -662,10 +662,10 @@ pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Parse
 		err.append(i.*, "Duplicate universe definition {s}\n", .{tokens[i.*].text});
 		return ParseError.UnexpectedToken;
 	}
-	const name = tokens[i.*].text;
+	const name = tokens[i.*];
 	i.* += 1;
-	ast.universe_declarations.put(name, Universe{
-		.name = tokens[i.*],
+	ast.universe_declarations.put(name.text, Universe{
+		.name = name,
 		.equality = try parse_expression(ast, i, tokens, err),
 		.int = try parse_expression(ast, i, tokens, err),
 		.nat = try parse_expression(ast, i, tokens, err),
@@ -2629,8 +2629,4 @@ pub fn main() anyerror!void {
 // canvas
 // input registry
 
-// note environment with vim 
-
-// Top-level universe parsing appears misaligned: the parser does not advance past the universe name before reading universe fields.
-// Parenthesized runtime universe parsing appears to use the wrong arity in at least one parser path.
-// Runtime macro parsing and runtime macro interpretation disagree about expected expression length.
+// interactive note environment with vim 
