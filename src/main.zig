@@ -372,6 +372,7 @@ const AST = struct {
 	universes: Map(Map(Definition)),
 	env: Map(Map(Expr)),
 	records: Map(Record),
+	top_level_structures: Buffer(Expr),
 
 	pub fn show(self: *AST) void {
 		var rit = self.records.iterator();
@@ -515,7 +516,8 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		.universe_declarations = Map(Universe).init(mem.*),
 		.universes = Map(Map(Definition)).init(mem.*),
 		.env = Map(Map(Expr)).init(mem.*),
-		.records = Map(Record).init(mem.*)
+		.records = Map(Record).init(mem.*),
+		.top_level_structures = Buffer(Expr).init(mem.*)
 	};
 	var i: u64 = 0;
 	while (i<tokens.len){
@@ -538,8 +540,7 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 			try parse_universe_def(&ast, &i, tokens, tokens[i], universe, err);
 		}
 		else{
-			err.append(i, "Unexpected token at top level {s}\n", .{tokens[i].text});
-			i += 1;
+			ast.top_level_structures.append(try parse_expression(&ast, &i, tokens, err)) catch unreachable;
 		}
 	}
 	return ast;
@@ -1177,6 +1178,9 @@ const Let = struct{
 };
 
 pub fn static_interpret(ast: *AST, err: *ErrorLog) ParseError!*Expr{
+	for (ast.top_level_structures.items) |*top| {
+		_ = try walk_expr(ast, top, err, true, null, null);
+	}
 	var it = ast.defs.iterator();
 	while (it.next()) |entry| {
 		if (std.mem.eql(u8, "main", entry.key_ptr.*) == false){
@@ -1289,7 +1293,7 @@ pub fn argmap_descend(argmap: *Map(*Expr), left: *Expr, right: *Expr, err: *Erro
 	}
 }
 
-pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Token, calling_token: Token) ParseError!*Expr {
+pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Token, calling_token: ?Token) ParseError!*Expr {
 	var processed: *Expr = expr;
 	switch (expr.*){
 		.expr => {
@@ -1368,28 +1372,30 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 			processed = expr;
 		}
 	}
-	if (run){
-		var scope = Buffer(Let).init(ast.mem.*);
-		var trace = Buffer(Token).init(ast.mem.*);
-		trace.append(calling_token) catch unreachable;
-		var it = ast.universes.iterator();
-		while (it.next()) |entry| {
-			ast.defs = entry.value_ptr.*;
-			if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
-				_ = try interpret(ast, &scope, processed, err, macro, uni, entry.value_ptr, &trace);
-				scope.clearRetainingCapacity();
+	if (calling_token) |calling| {
+		if (run){
+			var scope = Buffer(Let).init(ast.mem.*);
+			var trace = Buffer(Token).init(ast.mem.*);
+			trace.append(calling) catch unreachable;
+			var it = ast.universes.iterator();
+			while (it.next()) |entry| {
+				ast.defs = entry.value_ptr.*;
+				if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
+					_ = try interpret(ast, &scope, processed, err, macro, uni, entry.value_ptr, &trace);
+					scope.clearRetainingCapacity();
+				}
 			}
+			var ret = try interpret(ast, &scope, processed, err, macro, null, null, &trace);
+			while (ret == .tail){
+				if (std.mem.eql(u8, ret.tail.call.text, calling.text)){
+					ret = try interpret(ast, &scope, processed, err, macro, null, null, &trace);
+				}
+				else {
+					break;
+				}
+			}
+			return ret.expr;
 		}
-		var ret = try interpret(ast, &scope, processed, err, macro, null, null, &trace);
-		while (ret == .tail){
-			if (std.mem.eql(u8, ret.tail.call.text, calling_token.text)){
-				ret = try interpret(ast, &scope, processed, err, macro, null, null, &trace);
-			}
-			else {
-				break;
-			}
-		}
-		return ret.expr;
 	}
 	return processed;
 }
@@ -2629,3 +2635,4 @@ pub fn main() anyerror!void {
 // input registry
 
 // interactive note environment with vim 
+// macros cannot run at top level
