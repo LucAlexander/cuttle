@@ -352,6 +352,10 @@ const AST = struct {
 			std.debug.print("\n", .{});
 		}
 	}
+
+	pub fn write(out: std.fs.File) void {
+		//TODO faithful ordered write
+	}
 };
 
 const Macro = struct {
@@ -2337,6 +2341,35 @@ pub fn get_contents(mem: *const std.mem.Allocator, filename: []const u8) ![]u8 {
 	return contents;
 }
 
+pub fn get_stamp(path: []const u8) !PollStamp {
+    const stat = try std.fs.cwd().statFile(path);
+    return .{
+        .mtime = stat.mtime,
+        .size = stat.size,
+    };
+}
+
+pub fn spawn_vim(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.Child {
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    try child.spawn();
+    return child;
+}
+
+pub fn stop_child(child: *std.process.Child) !void {
+    const term = child.kill() catch |err| switch (err) {
+        error.AlreadyTerminated => return,
+        else => return err,
+    };
+    _ = term;
+}
+
+pub fn changed(a: PollStamp, b: PollStamp) bool {
+    return a.mtime != b.mtime or a.size != b.size;
+}
+
 pub fn main() anyerror!void {
 	const heap = std.heap.page_allocator;
 	const main_buffer = heap.alloc(u8, 0x1000000) catch unreachable;
@@ -2389,7 +2422,57 @@ pub fn main() anyerror!void {
 			err.handle(contents);
 			return;
 		}
-		main_expr.show();
+		const buf = ast.mem.alloc(u8, 40) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{s}.live", .{filename}) catch unreachable;
+		var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
+			std.debug.print("Error creating file: {s}\n", .{s});
+		};
+		ast.write(out);
+		out.close();
+		var vim_argv = [_][]const u8{ "vim", "-n", path };
+		var last_stamp = try get_stamp(s);
+		var child = try spawn_vim(main_mem, vim_argv[0..]);
+		defer stop_child(&child) catch {};
+		const poll_interval_ns = 250 * std.time.ns_per_ms;
+		while (true) {
+			std.time.sleep(poll_interval_ns);
+			const new_stamp = get_stamp(s) catch |err| switch (err) {
+				error.FileNotFound => continue,
+				else => return err,
+			};
+			if (changed(last_stamp, new_stamp)) {
+				last_stamp = new_stamp;
+				try stop_child(&child);
+				std.time.sleep(50 * std.time.ns_per_ms);
+				const recontents = try get_contents(&main_mem, s);
+				const retokens = tokenize(&main_mem, recontents);
+				ast = parse(&main_mem, &temp_mem, retokens.items, &err) catch {
+					err.handle(recontents);
+					return;
+				};
+				if (err.log.items.len != 0){
+					err.handle(recontents);
+					return;
+				}
+				if (debug){
+					ast.show();
+				}
+				const main_expr = static_interpret(&ast, &err) catch {
+					err.handle(recontents);
+					return;
+				};
+				if (err.log.items.len != 0){
+					err.handle(recontents);
+					return;
+				}
+				var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
+					std.debug.print("Error creating file: {s}\n", .{s});
+				};
+				ast.write(out);
+				out.close();
+				child = try spawn_vim(main_mem, vim_argv[0..]);
+			}
+		}
 		return;
 	}
 	const filename = args[1];
@@ -2423,5 +2506,3 @@ pub fn main() anyerror!void {
 // input registry
 
 // note environment with vim 
-
-//head and tail are forgotten
