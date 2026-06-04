@@ -675,7 +675,6 @@ pub fn parse_universe(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Parse
 		.all = try parse_expression(ast, i, tokens, err)
 	}) catch unreachable;
 	ast.universes.put(tokens[i.*].text, Map(Definition).init(ast.mem.*)) catch unreachable;
-	i.* += 1;
 }
 
 pub fn parse_universe_def(ast: *AST, i: *u64, tokens: []Token, name: Token, universe: *Map(Definition), err: *ErrorLog) ParseError!void {
