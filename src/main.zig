@@ -2342,11 +2342,43 @@ pub fn main() anyerror!void {
 	if (std.mem.eql(u8, args[1], "-h")){
 		std.debug.print("Help Menu\n", .{});
 		std.debug.print("   -h : Show this message\n", .{});
-		std.debug.print("   [infile name] : compile file\n", .{});
+		std.debug.print("   -i : Interactive mode\n", .{});
+		std.debug.print("   [infile name] : interpret file\n", .{});
 		return;
 	}
 	if (args.len < 2){
 		std.debug.print("-h for help\n", .{});
+		return;
+	}
+	if (args.len == 3){
+		if (std.mem.eql(u8, args[2], "-i") == false){
+			std.debug.print("-h for help\n", .{});
+			return;
+		}
+		const filename = args[1];
+		const contents = try get_contents(&main_mem, filename);
+		const tokens = tokenize(&main_mem, contents);
+		var err = ErrorLog.init(&main_mem);
+		var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
+			err.handle(contents);
+			return;
+		};
+		if (err.log.items.len != 0){
+			err.handle(contents);
+			return;
+		}
+		if (debug){
+			ast.show();
+		}
+		const main_expr = static_interpret(&ast, &err) catch {
+			err.handle(contents);
+			return;
+		};
+		if (err.log.items.len != 0){
+			err.handle(contents);
+			return;
+		}
+		main_expr.show();
 		return;
 	}
 	const filename = args[1];
@@ -2376,8 +2408,8 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// records
 // canvas
 // input registry
-// list to string
+
+// note environment with vim 
 
