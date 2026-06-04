@@ -7,11 +7,11 @@ Based on the revised uploaded interpreter source, I’ve written this as languag
 
 ## Overview
 
-The language is a small expression-oriented language with prefix syntax, global declarations, local mutable bindings, macros, records, lambdas, and semantic universes.
+The language is a small expression oriented language with prefix syntax, global declarations, local mutable bindings, macros, records, lambdas, and semantic universes.
 
-Programs are written as sequences of top-level forms. Evaluation begins at a definition named `main`.
+Programs are written as sequences of top level forms. Evaluation begins at a definition named `main`.
 
-The language is mostly S-expression based:
+The language is mostly S expression based:
 
 ```text
 (f x y)
@@ -19,7 +19,7 @@ The language is mostly S-expression based:
 (if cond yes no)
 ```
 
-Many fixed-arity forms may also be written without wrapping parentheses when the parser can determine their arity:
+Many fixed arity forms may also be written without wrapping parentheses when the parser can determine their arity:
 
 ```text
 + 1 2
@@ -40,7 +40,7 @@ String literals are written with double quotes:
 "some text"
 ```
 
-The following single-character tokens are recognized specially:
+The following single character tokens are recognized specially:
 
 ```text
 _ ' , + - * / % & | ^ < > ( )
@@ -100,7 +100,7 @@ Examples:
 foo
 ```
 
-Numbers are parsed into integer, natural, or floating-point atoms. Strings remain string atoms, including their surrounding quote text.
+Numbers are parsed into integer, natural, or floating point atoms. Strings remain string atoms, including their surrounding quote text.
 
 ## Expressions
 
@@ -146,11 +146,11 @@ Unquote is written with `,`:
 
 Unquote evaluates the expression that follows it.
 
-## Top-Level Program Structure
+## Top Level Program Structure
 
-A file is a sequence of top-level declarations.
+A file is a sequence of top level declarations.
 
-Accepted top-level forms are:
+Accepted top level forms are:
 
 ```text
 let
@@ -209,7 +209,7 @@ The argument list is usually a parenthesized list of names:
 define add (x y) (+ x y)
 ```
 
-A zero-argument definition uses an empty argument list:
+A zero argument definition uses an empty argument list:
 
 ```text
 define main () 123
@@ -223,13 +223,13 @@ Definitions are applied by writing the function name followed by its arguments:
 (add 1 2)
 ```
 
-or, in fixed-arity contexts:
+or, in fixed arity contexts:
 
 ```text
 add 1 2
 ```
 
-If more arguments are supplied than a function consumes, the result of the first application is applied to the remaining arguments. This supports higher-order and curried programming styles.
+If more arguments are supplied than a function consumes, the result of the first application is applied to the remaining arguments. This supports higher order and curried programming styles.
 
 ## Sequential Evaluation with `prog`
 
@@ -252,7 +252,7 @@ define main ()
     x)
 ```
 
-`prog` is the main form for sequencing side-effecting expressions such as `let`, `set`, `define`, `macro`, and `universe`.
+`prog` is the main form for sequencing side effecting expressions such as `let`, `set`, `define`, `macro`, and `universe`.
 
 ## Conditionals
 
@@ -377,7 +377,7 @@ Binary operators are prefix forms:
 (^ left right)
 ```
 
-They may also be written without parentheses in fixed-arity positions:
+They may also be written without parentheses in fixed arity positions:
 
 ```text
 + 1 2
@@ -402,7 +402,7 @@ Logical numeric operators:
 ^   returns 1 when exactly one operand is nonzero, else 0
 ```
 
-The result type is selected from the operand types. Floating-point operands produce floating-point results; integer operands produce integer results; otherwise natural-number arithmetic is used.
+The result type is selected from the operand types. Floating point operands produce floating point results; integer operands produce integer results; otherwise natural number arithmetic is used.
 
 ## Comparisons
 
@@ -621,7 +621,7 @@ Example shape:
 universe Type eq Int Nat Float Str Function Unknown
 ```
 
-Universe-specific definitions are written by using the universe name as a top-level form:
+Universe specific definitions are written by using the universe name as a top level form:
 
 ```text
 Type add (x y) Nat
@@ -646,7 +646,7 @@ known universe term -> that term's universe-specific meaning
 other atom          -> universe fallback meaning
 ```
 
-When a defined term is interpreted inside a universe, the interpreter can compare the computed universe meaning against the universe-specific declaration using the universe’s equality expression.
+When a defined term is interpreted inside a universe, the interpreter can compare the computed universe meaning against the universe specific declaration using the universe’s equality expression.
 
 This allows the same source expression to be interpreted simultaneously as:
 
@@ -685,7 +685,7 @@ define main ()
   (add 2 3)
 ```
 
-If a function has no required arguments, it can be used as a value-producing term:
+If a function has no required arguments, it can be used as a value producing term:
 
 ```text
 define five () 5
@@ -697,7 +697,7 @@ If a function receives fewer arguments than required, the expression remains ava
 
 ## Recursion and Tail Calls
 
-The evaluator tracks active calls and represents recursive tail-position work explicitly. When a recursive call returns to the same function, the evaluator can continue interpretation using the carried expression.
+The evaluator tracks active calls and represents recursive tail position work explicitly. When a recursive call returns to the same function, the evaluator can continue interpretation using the carried expression.
 
 This permits recursive definitions to be written directly:
 
