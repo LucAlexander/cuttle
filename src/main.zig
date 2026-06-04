@@ -182,6 +182,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put("==", EQ ) catch unreachable;
 	tokmap.put("!=", NE ) catch unreachable;
 	tokmap.put("error", ERROR) catch unreachable;
+	tokmap.put("record", RECORD) catch unreachable;
 	while (i < text.len){
 		const c = text[i];
 		switch(c){
@@ -317,6 +318,12 @@ const AST = struct {
 	records: Map(Record),
 
 	pub fn show(self: *AST) void {
+		var rit = self.records.iterator();
+		while (rit.next()) |entry| {
+			std.debug.print("record {s} ", .{entry.key_ptr.*});
+			entry.value_ptr.show();
+			std.debug.print("\n", .{});
+		}
 		var it = self.let.iterator();
 		while (it.next()) |entry| {
 			std.debug.print("let {s} ", .{entry.key_ptr.*});
@@ -378,7 +385,13 @@ const Definition = struct {
 
 const Record = struct {
 	name: Token,
-	fields: Buffer(Token)
+	fields: Buffer(Token),
+
+	pub fn show(self: *Record) void {
+		for (self.fields.items) |f| {
+			std.debug.print("{s} ", .{f.text});
+		}
+	}
 };
 
 const Expr = union(enum){
@@ -423,7 +436,7 @@ const Expr = union(enum){
 			.quote => {
 				std.debug.print("'", .{});
 				self.quote.show();
-			},
+			}
 		}
 	}
 };
@@ -506,7 +519,6 @@ pub fn parse_record(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseEr
 		rec.fields.append(item.atom) catch unreachable;
 	}
 	ast.records.put(name.text, rec) catch unreachable;
-	return;
 }
 
 pub fn parse_let(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) ParseError!void {
@@ -1316,6 +1328,7 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 				break;
 			}
 		}
+		return ret.expr;
 	}
 	return processed;
 }
@@ -1613,6 +1626,18 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 					}
 					head = expr.expr.items[0];
 					if (head.* == .atom){
+						for (scope.items) |let| {
+							if (std.mem.eql(u8, head.atom.text, let.name.text)){
+								const save = scope.items.len;
+								const new = try interpret(ast, scope, let.value, err, null, universe, universe_defs, calling_token);
+								if (new == .tail){
+									return new;
+								}
+								head.* = new.expr.*;
+								scope.items.len = save;
+								return try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
+							}
+						}
 						if (ast.defs.getPtr(head.atom.text)) |def| {
 							const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs, calling_token);
 							if (ret == .tail){
@@ -1625,11 +1650,29 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 						}
 					}
 					else if (head.* == .expr){
-						return try lambda(ast, scope, head, expr, err, universe, universe_defs);
+						if (head.expr.items.len != 0){
+							if (head.expr.items[0].* == .atom){
+								if (head.expr.items[0].atom.tag == LAMBDA){
+									return try lambda(ast, scope, head, expr, err, universe, universe_defs);
+								}
+								else{
+									return try record_access(ast, scope, head, expr, err, universe, universe_defs);
+								}
+							}
+						}
 					}
 				}
 				else if (head.* == .expr){
-					return try lambda(ast, scope, head, expr, err, universe, universe_defs);
+					if (head.expr.items.len != 0){
+						if (head.expr.items[0].* == .atom){
+							if (head.expr.items[0].atom.tag == LAMBDA){
+								return try lambda(ast, scope, head, expr, err, universe, universe_defs);
+							}
+							else{
+								return try record_access(ast, scope, head, expr, err, universe, universe_defs);
+							}
+						}
+					}
 				}
 			}
 		},
@@ -1691,6 +1734,45 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 		}
 	}
 	return ExprTail{.expr=expr};
+}
+
+pub fn record_access(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!ExprTail {
+	if (ast.records.getPtr(head.expr.items[0].atom.text)) |record| {
+		if (expr.expr.items.len > 1){
+			if (expr.expr.items[1].* == .atom){
+				if (head.expr.items.len-1 != record.fields.items.len){
+					err.append(head.expr.items[0].atom.pos, "Unfinished record acess\n", .{});
+					return ParseError.UnexpectedToken;
+				}
+				for (record.fields.items, head.expr.items[1..]) |tok, field| {
+					if (std.mem.eql(u8, tok.text, expr.expr.items[1].atom.text)){
+						if (expr.expr.items.len == 2){
+							return ExprTail{
+								.expr=field
+							};
+						}
+						else{
+							const new = ast.mem.create(Expr) catch unreachable;
+							new.* = Expr{
+								.expr = Buffer(*Expr).init(ast.mem.*)
+							};
+							new.expr.append(field) catch unreachable;
+							new.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
+							return try interpret(ast, scope, new, err, null, universe, universe_defs, null);
+						}
+					}
+				}
+				err.append(expr.expr.items[1].atom.pos, "Couldn't find field {s}\n", .{expr.expr.items[1].atom.text});
+				return ParseError.UnexpectedToken;
+			}
+			else{
+				err.append(head.expr.items[0].atom.pos, "Expected field name for recorda ccess\n", .{});
+				return ParseError.UnexpectedToken;
+			}
+		}
+	}
+	err.append(head.expr.items[0].atom.pos, "Unknown record or term {s}\n", .{head.expr.items[0].atom.text});
+	return ParseError.UnexpectedToken;
 }
 
 pub fn check(ast: *AST, scope: *Buffer(Let), head: []const u8, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition), calling_token: ?*Buffer(Token)) ParseError!ExprTail {
