@@ -1710,7 +1710,40 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								if (head.expr.items.len != 0){
 									if (head.expr.items[0].* == .atom){
 										if (ast.records.getPtr(head.expr.items[0].atom.text)) |_| {
-											return try record_access(ast, scope, head, expr, err, universe, universe_defs);
+											if (ast.records.getPtr(head.expr.items[0].atom.text)) |record| {
+												if (expr.expr.items.len > 1){
+													if (expr.expr.items[1].* == .atom){
+														if (head.expr.items.len-1 != record.fields.items.len){
+															err.append(head.expr.items[0].atom.pos, "Unfinished record acess\n", .{});
+															return ParseError.UnexpectedToken;
+														}
+														for (record.fields.items, head.expr.items[1..]) |tok, field| {
+															if (std.mem.eql(u8, tok.text, expr.expr.items[1].atom.text)){
+																if (expr.expr.items.len == 2){
+																	return ExprTail{
+																		.expr=field
+																	};
+																}
+																else{
+																	const new = ast.mem.create(Expr) catch unreachable;
+																	new.* = Expr{
+																		.expr = Buffer(*Expr).init(ast.mem.*)
+																	};
+																	new.expr.append(field) catch unreachable;
+																	new.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
+																	return try interpret(ast, scope, new, err, null, universe, universe_defs, null);
+																}
+															}
+														}
+														err.append(expr.expr.items[1].atom.pos, "Couldn't find field {s}\n", .{expr.expr.items[1].atom.text});
+														return ParseError.UnexpectedToken;
+													}
+													else{
+														err.append(head.expr.items[0].atom.pos, "Expected field name for record access\n", .{});
+														return ParseError.UnexpectedToken;
+													}
+												}
+											}
 										}
 									}
 								}
@@ -1888,8 +1921,7 @@ pub fn record_access(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, e
 			}
 		}
 	}
-	err.append(head.expr.items[0].atom.pos, "Unknown record or term {s}\n", .{head.expr.items[0].atom.text});
-	return ParseError.UnexpectedToken;
+	return ExprTail{.expr=expr};
 }
 
 pub fn check(ast: *AST, scope: *Buffer(Let), head: []const u8, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition), calling_token: ?*Buffer(Token)) ParseError!ExprTail {
