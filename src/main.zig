@@ -1836,7 +1836,50 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 					}
 				}
 				else if (head.* == .expr){
-					if (head.expr.items.len != 0){
+					var i: u64 = 0;
+					while (i < expr.expr.items.len){
+						const save = scope.items.len;
+						const eval = try interpret(ast, scope, expr.expr.items[i], err, null, universe, universe_defs, null);
+						expr.expr.items[i] = eval.expr;
+						scope.items.len = save;
+						i += 1;
+					}
+					head = expr.expr.items[0];
+					if (head.* == .atom){
+						for (scope.items) |let| {
+							if (std.mem.eql(u8, head.atom.text, let.name.text)){
+								const save = scope.items.len;
+								const new = try interpret(ast, scope, let.value, err, null, universe, universe_defs, calling_token);
+								if (new == .tail){
+									return new;
+								}
+								head.* = new.expr.*;
+								scope.items.len = save;
+								return try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
+							}
+						}
+						if (ast.let.getPtr(head.atom.text)) |let| {
+							const save = scope.items.len;
+							const new = try interpret(ast, scope, let, err, null, universe, universe_defs, calling_token);
+							if (new == .tail){
+								return new;
+							}
+							head.* = new.expr.*;
+							scope.items.len = save;
+							return try interpret(ast, scope, expr, err, null, universe, universe_defs, calling_token);
+						}
+						if (ast.defs.getPtr(head.atom.text)) |def| {
+							const ret = try argapply_defs(ast, scope, def, expr, err, universe, universe_defs, calling_token);
+							if (ret == .tail){
+								return ret;
+							}
+							return check(ast, scope, head.atom.text, ret.expr, err, universe, universe_defs, calling_token);
+						}
+						else if (ast.universes.getPtr(head.atom.text)) |uni| {
+							return ExprTail{.expr=try list_parse_universe_def(ast, uni, expr)};
+						}
+					}
+					else if (head.expr.items.len != 0){
 						if (head.expr.items[0].* == .atom){
 							if (head.expr.items[0].atom.tag == LAMBDA){
 								return try lambda(ast, scope, head, expr, err, universe, universe_defs);
@@ -1923,6 +1966,7 @@ pub fn walk_quote(scope: *Buffer(Let), quote: *Expr) *Expr {
 					return let.value;
 				}
 			}
+			return quote;
 		},
 		.expr => {
 			var i: u64 = 0;
