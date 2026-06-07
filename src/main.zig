@@ -2337,7 +2337,7 @@ pub fn argapply_defs(ast: *AST, scope: *Buffer(Let), def: *Definition, expr: *Ex
 					}
 					const tmp_copy = deep_copy(ast.tmp, ret.?.expr);
 					restore_from_allocator(ast.mem, alloc_ptr);
-					ret.?.tail.expr = deep_copy(ast.mem, tmp_copy);
+					ret.?.expr = deep_copy(ast.mem, tmp_copy);
 					reset_from_allocator(ast.tmp);
 					scope.* = scope_copy;
 					calling.* = calling_copy.?;
