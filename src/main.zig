@@ -1448,6 +1448,79 @@ pub fn distribute_argmap(ast: *AST, argmap: *Map(*Expr), expr: *Expr) *Expr {
 	return new;
 }
 
+var internal_uid: []const u8 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+pub fn uid(mem: *const std.mem.Allocator) []u8 {
+	var new = mem.alloc(u8, internal_uid.len)
+		catch unreachable;
+	var i: u64 = 0;
+	var inc: bool = false;
+	while (i < new.len){
+		if (internal_uid[i] < 'Z'){
+			new[i] = internal_uid[i] + 1;
+			i += 1;
+			break;
+		}
+		new[i] = 'A';
+		inc = true;
+		i += 1;
+	}
+	if (inc){
+		new[i] = internal_uid[i]+1;
+	}
+	while (i < new.len){
+		new[i] = internal_uid[i];
+		i += 1;
+	}
+	internal_uid = new;
+	return new;
+}
+
+pub fn realias_lambda(ast: *AST, expr: *Expr) *Expr {
+	var map = Map([]u8).init(ast.mem.*);
+	if (expr.expr.items[1].* == .atom){
+		map.put(expr.expr.items[1].atom.text, uid(ast.mem)) catch unreachable;
+	}
+	else{
+		for (expr.expr.items[1].expr.items) |arg| {
+			map.put(arg.atom.text, uid(ast.mem)) catch unreachable;
+		}
+	}
+	return distribute_lambda_realias(ast, &map, expr);
+}
+
+pub fn distribute_lambda_realias(ast: *AST, map: *Map([]u8), expr: *Expr) *Expr {
+	switch (expr.*){
+		.expr => {
+			const new = ast.mem.create(Expr) catch unreachable;
+			new.* = Expr{
+				.expr = Buffer(*Expr).init(ast.mem.*)
+			};
+			for (expr.expr.items) |sub| {
+				new.expr.append(distribute_lambda_realias(ast, map, sub)) catch unreachable;
+			}
+			return new;
+		},
+		.atom => {
+			if (map.get(expr.atom.text)) |replacement| {
+				const new = ast.mem.create(Expr) catch unreachable;
+				new.* = expr.*;
+				new.atom.text = replacement;
+				return new;
+			}
+			return expr;
+		},
+		.quote => {
+			const new = ast.mem.create(Expr) catch unreachable;
+			new.* = Expr{
+				.quote = distribute_lambda_realias(ast, map, expr.quote)
+			};
+			return new;
+		}
+	}
+	unreachable;
+}
+
 pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, top_level_macro: ?Token, universe: ?Universe, universe_defs: ?*Map(Definition), calling_token: ?*Buffer(Token)) ParseError!ExprTail {
 	switch (expr.*) {
 		.expr => {
@@ -1603,9 +1676,10 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							}
 						},
 						LAMBDA => {
-							const reeval = try interpret(ast, scope, expr.expr.items[2], err, null, universe, universe_defs, null);
-							expr.expr.items[2] = reeval.expr;
-							return ExprTail{.expr=expr};
+							const realiased_expr = realias_lambda(ast, expr);
+							const reeval = try interpret(ast, scope, realiased_expr.expr.items[2], err, null, universe, universe_defs, null);
+							realiased_expr.expr.items[2] = reeval.expr;
+							return ExprTail{.expr=realiased_expr};
 						},
 						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
 							const left = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
@@ -2770,3 +2844,5 @@ pub fn main() anyerror!void {
 // input registry
 
 // interactive note environment with vim 
+
+// im not renaming lambda args, this is a real problem
