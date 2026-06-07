@@ -833,6 +833,10 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 	expr.expr.append(first) catch unreachable;
 	i.* += 1;
 	while (expr.expr.items.len < arity+1){
+		if (i.* == tokens.len){
+			err.append(i.*-1, "Unexpected end of file\n", .{});
+			return ParseError.UnexpectedToken;
+		}
 		var head = tokens[i.*];
 		if (head.tag == QUOTE){
 			i.* += 1;
