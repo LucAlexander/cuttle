@@ -1223,6 +1223,7 @@ pub fn macro_argmap(ast: *AST, structure: *Expr, args: []*Expr, err: *ErrorLog) 
 		};
 		argexpr.expr.appendSlice(args) catch unreachable;
 		map.put(structure.atom.text, argexpr) catch unreachable;
+		return map;
 	}
 	else if (structure.* == .quote){
 		if (nearest_token(structure)) |pos| {
