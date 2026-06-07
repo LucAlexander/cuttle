@@ -1603,6 +1603,8 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							}
 						},
 						LAMBDA => {
+							const reeval = try interpret(ast, scope, expr.expr.items[2], err, null, universe, universe_defs, null);
+							expr.expr.items[2] = reeval.expr;
 							return ExprTail{.expr=expr};
 						},
 						LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
@@ -1740,37 +1742,35 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 									if (head.expr.items[0].* == .atom){
 										if (ast.records.getPtr(head.expr.items[0].atom.text)) |_| {
 											if (ast.records.getPtr(head.expr.items[0].atom.text)) |record| {
-												if (expr.expr.items.len > 1){
-													if (expr.expr.items[1].* == .atom){
-														if (head.expr.items.len-1 != record.fields.items.len){
-															err.append(head.expr.items[0].atom.pos, "Unfinished record acess\n", .{});
-															return ParseError.UnexpectedToken;
-														}
-														for (record.fields.items, head.expr.items[1..]) |tok, field| {
-															if (std.mem.eql(u8, tok.text, expr.expr.items[1].atom.text)){
-																if (expr.expr.items.len == 2){
-																	return ExprTail{
-																		.expr=field
-																	};
-																}
-																else{
-																	const new = ast.mem.create(Expr) catch unreachable;
-																	new.* = Expr{
-																		.expr = Buffer(*Expr).init(ast.mem.*)
-																	};
-																	new.expr.append(field) catch unreachable;
-																	new.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
-																	return try interpret(ast, scope, new, err, null, universe, universe_defs, null);
-																}
+												if (expr.expr.items[1].* == .atom){
+													if (head.expr.items.len-1 != record.fields.items.len){
+														err.append(head.expr.items[0].atom.pos, "Unfinished record acess\n", .{});
+														return ParseError.UnexpectedToken;
+													}
+													for (record.fields.items, head.expr.items[1..]) |tok, field| {
+														if (std.mem.eql(u8, tok.text, expr.expr.items[1].atom.text)){
+															if (expr.expr.items.len == 2){
+																return ExprTail{
+																	.expr=field
+																};
+															}
+															else{
+																const new = ast.mem.create(Expr) catch unreachable;
+																new.* = Expr{
+																	.expr = Buffer(*Expr).init(ast.mem.*)
+																};
+																new.expr.append(field) catch unreachable;
+																new.expr.appendSlice(expr.expr.items[2..]) catch unreachable;
+																return try interpret(ast, scope, new, err, null, universe, universe_defs, null);
 															}
 														}
-														err.append(expr.expr.items[1].atom.pos, "Couldn't find field {s}\n", .{expr.expr.items[1].atom.text});
-														return ParseError.UnexpectedToken;
 													}
-													else{
-														err.append(head.expr.items[0].atom.pos, "Expected field name for record access\n", .{});
-														return ParseError.UnexpectedToken;
-													}
+													err.append(expr.expr.items[1].atom.pos, "Couldn't find field {s}\n", .{expr.expr.items[1].atom.text});
+													return ParseError.UnexpectedToken;
+												}
+												else{
+													err.append(head.expr.items[0].atom.pos, "Expected field name for record access\n", .{});
+													return ParseError.UnexpectedToken;
 												}
 											}
 										}
@@ -1909,10 +1909,35 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 			return ExprTail{.expr=expr};
 		},
 		.quote => {
-			return ExprTail{.expr=expr};
+			return ExprTail{.expr=walk_quote(scope, expr)};
 		}
 	}
 	return ExprTail{.expr=expr};
+}
+
+pub fn walk_quote(scope: *Buffer(Let), quote: *Expr) *Expr {
+	switch (quote.*){
+		.atom => {
+			for (scope.items) |let| {
+				if (std.mem.eql(u8, quote.atom.text, let.name.text)){
+					return let.value;
+				}
+			}
+		},
+		.expr => {
+			var i: u64 = 0;
+			while (i < quote.expr.items.len){
+				quote.expr.items[i] = walk_quote(scope, quote.expr.items[i]);
+				i += 1;
+			}
+			return quote;
+		},
+		.quote => {
+			quote.quote = walk_quote(scope, quote.quote);
+			return quote;
+		}
+	}
+	unreachable;
 }
 
 pub fn record_access(ast: *AST, scope: *Buffer(Let), head: *Expr, expr: *Expr, err: *ErrorLog, universe: ?Universe, universe_defs: ?*Map(Definition)) ParseError!ExprTail {
