@@ -759,6 +759,9 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog) Par
 			}
 			return let;
 		},
+		HEAD, TAIL => {
+			return try parse_sub_expression_arity(ast, i, tokens, err, 1);
+		},
 		LAMBDA, LE, LT, GE, GT, EQ, NE, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 2);
 		},
@@ -911,6 +914,12 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 					err.append(i.*, "set expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
+				expr.expr.append(let) catch unreachable;
+				continue;
+			},
+			HEAD, TAIL => {
+				const let = ast.mem.create(Expr) catch unreachable;
+				let.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
 				expr.expr.append(let) catch unreachable;
 				continue;
 			},
@@ -1083,6 +1092,12 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 					err.append(i.*, "set expression requires an identifier for a name", .{});
 					return ParseError.UnexpectedToken;
 				}
+				expr.expr.append(let) catch unreachable;
+				continue;
+			},
+			HEAD, TAIL => {
+				const let = ast.mem.create(Expr) catch unreachable;
+				let.* = try parse_sub_expression_arity(ast, i, tokens, err, 1);
 				expr.expr.append(let) catch unreachable;
 				continue;
 			},
@@ -1462,15 +1477,29 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 							}
 						},
 						HEAD => {
-							return try interpret(ast, scope, expr.expr.items[0], err, null, universe, universe_defs, null);
+							const interm = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
+							expr.expr.items[1] = interm.expr;
+							if (expr.expr.items[1].* == .expr){
+								if (expr.expr.items[1].expr.items.len != 0){
+									return try interpret(ast, scope, expr.expr.items[1].expr.items[0], err, null, universe, universe_defs, null);
+								}
+							}
+							return try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
 						},
 						TAIL => {
+							const interm = try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
+							expr.expr.items[1] = interm.expr;
 							const tail = ast.mem.create(Expr) catch unreachable;
 							tail.* = Expr{
 								.expr = Buffer(*Expr).init(ast.mem.*)
 							};
-							tail.expr.appendSlice(expr.expr.items[1..]) catch unreachable;
-							return try interpret(ast, scope, tail, err, null, universe, universe_defs, null);
+							if (expr.expr.items[1].* == .expr){
+								if (expr.expr.items[1].expr.items.len > 1){
+									tail.expr.appendSlice(expr.expr.items[1].expr.items[1..]) catch unreachable;
+									return try interpret(ast, scope, tail, err, null, universe, universe_defs, null);
+								}
+							}
+							return ExprTail{.expr = tail};
 						},
 						IF => {
 							const cond = expr.expr.items[1];
@@ -2672,4 +2701,3 @@ pub fn main() anyerror!void {
 // input registry
 
 // interactive note environment with vim 
-// macros cannot run at top level
