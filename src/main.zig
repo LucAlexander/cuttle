@@ -1486,12 +1486,28 @@ pub fn realias_lambda(ast: *AST, expr: *Expr) *Expr {
 			map.put(arg.atom.text, uid(ast.mem)) catch unreachable;
 		}
 	}
-	return distribute_lambda_realias(ast, &map, expr);
+	const new = ast.mem.create(Expr) catch unreachable;
+	new.* = Expr{
+		.expr = Buffer(*Expr).init(ast.mem.*)
+	};
+	new.expr.append(expr.expr.items[0]) catch unreachable;
+	new.expr.append(distribute_lambda_realias(ast, &map, expr.expr.items[1])) catch unreachable;
+	new.expr.append(distribute_lambda_realias(ast, &map, expr.expr.items[2])) catch unreachable;
+	return new;
 }
 
 pub fn distribute_lambda_realias(ast: *AST, map: *Map([]u8), expr: *Expr) *Expr {
 	switch (expr.*){
 		.expr => {
+			if (expr.expr.items.len == 3){
+				if (expr.expr.items[0].* == .atom){
+					if (expr.expr.items[0].atom.tag == LAMBDA){
+						var new = realias_lambda(ast, expr);
+						new.expr.items[2] = distribute_lambda_realias(ast, map, new.expr.items[2]);
+						return new;
+					}
+				}
+			}
 			const new = ast.mem.create(Expr) catch unreachable;
 			new.* = Expr{
 				.expr = Buffer(*Expr).init(ast.mem.*)
