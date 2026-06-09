@@ -1399,7 +1399,6 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 			trace.append(calling) catch unreachable;
 			var it = ast.universes.iterator();
 			while (it.next()) |entry| {
-				ast.defs = entry.value_ptr.*;
 				if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
 					_ = try interpret(ast, &scope, processed, err, macro, uni, entry.value_ptr, &trace);
 					scope.clearRetainingCapacity();
@@ -2879,4 +2878,4 @@ pub fn main() anyerror!void {
 // general way to do syscalls I guess?
 // interactive note environment with vim, let it be a formatter too, things evaluate on save. 
 // comp environment blocks
-// head and tail need to reach through quotes? 
+// cond?
