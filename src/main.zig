@@ -1573,6 +1573,15 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 									return try interpret(ast, scope, expr.expr.items[1].expr.items[0], err, null, universe, universe_defs, null);
 								}
 							}
+							else if (expr.expr.items[1].* == .quote){
+								const target = expr.expr.items[1].quote;
+								if (target.* == .expr){
+									if (target.expr.items[1].expr.items.len != 0){
+										return try interpret(ast, scope, target.expr.items[1].expr.items[0], err, null, universe, universe_defs, null);
+									}
+								}
+								return try interpret(ast, scope, target, err, null, universe, universe_defs, null);
+							}
 							return try interpret(ast, scope, expr.expr.items[1], err, null, universe, universe_defs, null);
 						},
 						TAIL => {
@@ -1586,6 +1595,15 @@ pub fn interpret(ast: *AST, scope: *Buffer(Let), expr: *Expr, err: *ErrorLog, to
 								if (expr.expr.items[1].expr.items.len > 1){
 									tail.expr.appendSlice(expr.expr.items[1].expr.items[1..]) catch unreachable;
 									return try interpret(ast, scope, tail, err, null, universe, universe_defs, null);
+								}
+							}
+							else if (expr.expr.items[1].* == .quote){
+								const target = expr.expr.items[1].quote;
+								if (target.* == .expr){
+									if (target.expr.items[1].expr.items.len > 1){
+										tail.expr.appendSlice(target.expr.items[1..]) catch unreachable;
+										return try interpret(ast, scope, tail, err, null, universe, universe_defs, null);
+									}
 								}
 							}
 							return ExprTail{.expr = tail};
@@ -2858,7 +2876,7 @@ pub fn main() anyerror!void {
 //TODO
 // canvas
 // input registry
-
-// interactive note environment with vim 
-
-// im not renaming lambda args, this is a real problem
+// general way to do syscalls I guess?
+// interactive note environment with vim, let it be a formatter too, things evaluate on save. 
+// comp environment blocks
+// head and tail need to reach through quotes? 
