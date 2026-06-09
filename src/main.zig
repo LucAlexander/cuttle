@@ -1400,7 +1400,8 @@ pub fn walk_expr(ast: *AST, expr: *Expr, err: *ErrorLog, run: bool, macro: ?Toke
 			var it = ast.universes.iterator();
 			while (it.next()) |entry| {
 				if (ast.universe_declarations.get(entry.key_ptr.*)) |uni| {
-					_ = try interpret(ast, &scope, processed, err, macro, uni, entry.value_ptr, &trace);
+					const temp = deep_copy(ast.mem, processed);
+					_ = try interpret(ast, &scope, temp, err, macro, uni, entry.value_ptr, &trace);
 					scope.clearRetainingCapacity();
 				}
 			}
