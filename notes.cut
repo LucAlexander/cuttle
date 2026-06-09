@@ -26,6 +26,9 @@ type Atom (elem) elem
 
 type void () ()
 
+type Cons () Term Any Term Any Any
+define Cons () lambda (x) lambda (y) (x y)
+
 type main () (Atom int)
-define main () 1
+define main () (Cons 1 2)
 
