@@ -473,8 +473,8 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		.env = Map(Env).init(mem.*)
 	};
 	var default = Env{
-		.let = Scope.init(mem.*),
-		.vars = Scope.init(mem.*),
+		.let = Scope.init(mem),
+		.vars = Scope.init(mem),
 		.universes = Map(Universe).init(mem.*),
 		.records = Map(Record).init(mem.*),
 	};
@@ -631,11 +631,15 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 					},
 					PROG => {
 						var i: u64 = 0;
+						const frame = env.let.push_frame();
+						const vframe = env.let.push_frame();
 						while (i < expr.expr.items.len){
 							const line = try metabolize(ast, expr.expr.items[i], err, env);
 							expr.expr.items[i] = line;
 							i += 1;
 						}
+						env.let.pop_frame(frame);
+						env.vars.pop_frame(vframe);
 						return expr.expr.items[expr.expr.items.len-1];
 					},
 					CASE => {
@@ -660,7 +664,40 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 						return ParseError.UnexpectedToken;
 					},
 					COMP => {
-						//TODO
+						if (expr.expr.items.len != 3){
+							err.append(expr.expr.items[0].atom.pos, "Malformed comp\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						const environment = try metabolize(ast, expr.expr.item[1], err, env);
+						if (environment.* != .atom){
+							err.append(expr.expr.items[0].atom.pos, "Expected atom for environment\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						if (expr.expr.items[2].* != .expr){
+							err.append(expr.expr.items[0].atom.pos, "Expected program for computation\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						if (ast.env.getPtr(environment.atom.text)) |_| { }
+						else{
+							ast.env.put(environment.atom.text, Env{
+								.let = Scope.init(ast.mem),
+								.vars = Scope.init(ast.mem),
+								.universes = Map(Universe).init(ast.mem.*),
+								.records = Map(Record).init(ast.mem.*),
+							})
+						}
+						if (ast.env.getPtr(environment.atom.text)) |exists| {
+							var i: u64 = 0;
+							const frame = exists.let.push_frame();
+							const vframe = exists.vars.push_frame();
+							while (i < expr.expr.items.len){
+								expr.expr.items[i] = try metabolize(ast, expr.expr.items[i], err, env);
+							}
+							exists.let.pop_frame(frame);
+							exists.vars.pop_frame(vframe);
+							return expr.expr.items[expr.expr.items.len-1];
+						}
+						unreachable;
 					},
 					HEAD => {
 						if (expr.expr.items.len != 2){
