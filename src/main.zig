@@ -688,11 +688,13 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env) ParseError!
 						tail.expr.appendSlice(arg.expr.items[1..]) catch unreachable;
 						return tail;
 					},
-					QUOTE => {
-						//TODO
-					},
 					UNQUOTE => {
-						//TODO
+						const quoted = try metabolize(ast, expr.expr.items[1], err, env);
+						if (quoted.* == .quote){
+							return quoted.quote;
+						}
+						err.append(expr.expr.items[0].atom.pos, "Expected quoted data\n", .{});
+						return ParseError.UnexpectedToken;
 					},
 					CONS => {
 						if (expr.expr.items.len != 3){
