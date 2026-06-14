@@ -639,7 +639,25 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 						return expr.expr.items[expr.expr.items.len-1];
 					},
 					CASE => {
-						//TODO
+						if (expr.expr.items.len < 2){
+							err.append(expr.expr.items[0].atom.pos, "Malformed case\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						const arg = try metabolize(ast, expr.expr.items[1], err, env);
+						var i: u64 = 1;
+						while (i < expr.expr.items.len){
+							const map = try metabolize(ast, expr.expr.items[i], err, env);
+							expr.expr.items[i] = map;
+							if (map.* != .expr){
+								err.append(expr.expr.items[0].atom.pos, "malformed case mapping\n", .{});
+								return ParseError.UnexpectedToken;
+							}
+							if (structural_eq(map.expr.items[0], arg)){
+								return try metabolize(ast, map.expr.items[1], err, env);
+							}
+						}
+						err.append(expr.expr.items[0].atom.pos, "partial case\n", .{});
+						return ParseError.UnexpectedToken;
 					},
 					COMP => {
 						//TODO
@@ -649,7 +667,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 							err.append(expr.expr.items[0].atom.pos, "malformed head\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const arg = try metabolize(ast, expr.expr.items[1], err, env");
+						const arg = try metabolize(ast, expr.expr.items[1], err, env);
 						if (arg.* != .expr){
 							return arg;
 						}
@@ -895,7 +913,7 @@ pub fn resolve_to_arity(ast: *AST, name: TOKEN) u8 {
 			return 2;
 		},
 		UNIVERSE => {
-			return 8;
+			return 9;
 		},
 		else => {}
 	}
