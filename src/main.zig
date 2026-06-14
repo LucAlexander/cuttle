@@ -770,7 +770,13 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 					LAMBDA => {
 						return expr;
 					},
-					//TODO math
+					ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT => {
+						if (expr.items.len != 3){
+							err.append(expr.expr.items[0].atom.pos, "Expected 2 args for binary operand\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						return binop(ast, expr.items[0].atom.tag, expr.items[1], expr.items[2]);
+					},
 					else => {
 						if (env.universes.getPtr(expr.expr.items[0].atom.text)) |interpretation| {
 							if (expr.expr.items.len != 3){
@@ -797,11 +803,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 								return expr;
 							}
 							if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
-								if (expr.items.len == 2){
-									const right = try metabolize(ast, expr.items[1], err, env);
-									if (right.* == .atom){
-										return try record_access(ast, record, term, right, err);
-									}
+								const right = try metabolize(ast, expr.items[1], err, env);
+								if (right.* == .atom){
+									return try record_access(ast, record, term, right, expr, err, env);
 								}
 							}
 							if (term.expr.items.len != 3){
@@ -834,11 +838,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 					return expr;
 				}
 				if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
-					if (expr.items.len == 2){
-						const right = try metabolize(ast, expr.items[1], err, env);
-						if (right.* == .atom){
-							return try record_access(ast, record, term, right, err);
-						}
+					const right = try metabolize(ast, expr.items[1], err, env);
+					if (right.* == .atom){
+						return try record_access(ast, record, term, right, expr, err, env);
 					}
 				}
 				if (term.expr.items.len != 3){
@@ -861,8 +863,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 		.atom => {
 			//TODO abstract interpretation
 			if (env.let.getPtr(expr.atom.text)) |def| {
-				
+				return try metabolize(ast, def, err, env);
 			}
+			return expr;
 		},
 		.quote => {
 			return expr;
@@ -870,11 +873,166 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, environment: *Env) Par
 	}
 }
 
-pub fn record_access(ast: *AST, record: Record, host: *Expr, right: *Expr, err: *ErrorLog) ParseErr!*Expr {
+pub fn binop_type(comptime T: type, op: TOKEN, l: T, r: T) T {
+	var v:T = 0;
+	switch (op){
+		LT => {
+			if (l < r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		GT => {
+			if (l > r){
+				v = 1;
+			}
+			else {
+				v = 0;
+			}
+		},
+		ADD => {
+			v = l + r;
+		},
+		SUB => {
+			v = l - r;
+		},
+		MUL => {
+			v = l * r;
+		},
+		DIV => {
+			if (r == 0){
+				unreachable;
+			}
+			v = @divExact(l, r);
+		},
+		MOD => {
+			if (r == 0){
+				unreachable;
+			}
+			v = @mod(l, r);
+		},
+		AND => {
+			if ((l != 0) and (r != 0)){
+				return 1;
+			}
+			return 0;
+		},
+		OR => {
+			if ((l != 0) or (r != 0)) {
+				return 1;
+			}
+			return 0;
+		},
+		XOR => {
+			if ((l != 0 and r == 0) or (l == 0 and r != 0)){
+				return 1;
+			}
+			return 0;
+		},
+		else => {
+			unreachable;
+	return v;
+}
+
+pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
+	if (left.atom.tag == FLOAT or right.atom.tag == FLOAT){
+		const l: f64 = left.atom.value.?.float;
+		var r: f64 = 0;
+		if (right.atom.value.? == .int){
+			r = @floatFromInt(right.atom.value.?.int);
+		}
+		else if (right.atom.value.? == .nat){
+			r = @floatFromInt(right.atom.value.?.nat);
+		}
+		else{
+			r = right.atom.value.?.float;
+		}
+		const v = binop_type(f64, op, l, r);
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = FLOAT,
+				.text = s,
+				.value = .{
+					.float = v
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	else if (left.atom.tag == INT or right.atom.tag == INT){
+		const l: i64 = left.atom.value.?.int;
+		var r: i64 = 0;
+		if (right.atom.value.? == .int){
+			r = right.atom.value.?.int;
+		}
+		else if (right.atom.value.? == .nat){
+			r = @intCast(right.atom.value.?.nat);
+		}
+		else{
+			r = @intFromFloat(right.atom.value.?.float);
+		}
+		const v = binop_type(i64, op, l, r);
+		const ret = ast.mem.create(Expr) catch unreachable;
+		const buf = ast.mem.alloc(u8, 20) catch unreachable;
+		const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+		ret.* = Expr{
+			.atom = Token{
+				.tag = INT,
+				.text = s,
+				.value = .{
+					.int = v
+				},
+				.pos = 0
+			}
+		};
+		return ret;
+	}
+	const l: u64 = left.atom.value.?.nat;
+	var r: u64 = 0;
+	if (right.atom.value.? == .int){
+		r = @intCast(right.atom.value.?.int);
+	}
+	else if (right.atom.value.? == .nat){
+		r = right.atom.value.?.nat;
+	}
+	else{
+		r = @intFromFloat(right.atom.value.?.float);
+	}
+	const v = binop_type(u64, op, l, r);
+	const ret = ast.mem.create(Expr) catch unreachable;
+	const buf = ast.mem.alloc(u8, 20) catch unreachable;
+	const s = std.fmt.bufPrint(buf, "{}", .{v}) catch unreachable;
+	ret.* = Expr{
+		.atom = Token{
+			.tag = NAT,
+			.text = s,
+			.value = .{
+				.nat = v
+			},
+			.pos = 0
+		}
+	};
+	return ret;
+}
+
+pub fn record_access(ast: *AST, record: Record, host: *Expr, right: *Expr, outer: *Expr, err: *ErrorLog, env: *Env) ParseErr!*Expr {
 	const name = right.atom.text;
 	for (record.fields.items, 1..) |item, i| {
 		if (std.mem.eql(u8, item.text, name)){
+			const new = ast.mem.create(Expr) catch unreachable;
 			return host.expr.items[i];
+			new.* = Expr{
+				.expr = Buffer(*Expr).init(ast.mem.*)
+			};
+			new.expr.append(host.expr.items[i]) catch unreachable;
+			new.expr.appendSlice(outer.expr.items[2..]) catch unreachable;
+			return try metabolize(ast, new, err, env);
 		}
 	}
 	err.append(right.atom.pos, "No field {s} in record {s}", .{name, host.expr.items[0].atom.text});
