@@ -688,6 +688,12 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env) ParseError!
 						tail.expr.appendSlice(arg.expr.items[1..]) catch unreachable;
 						return tail;
 					},
+					QUOTE => {
+						//TODO
+					},
+					UNQUOTE => {
+						//TODO
+					},
 					CONS => {
 						if (expr.expr.items.len != 3){
 							err.append(expr.expr.items[0].atom.pos, "Malformed cons\n", .{});
@@ -826,6 +832,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env) ParseError!
 			return expr;
 		}
 	}
+	return expr;
 }
 
 pub fn binop_type(comptime T: type, op: TOKEN, l: T, r: T) T {
@@ -1029,7 +1036,27 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env) Pars
 }
 
 pub fn distribute_args(ast: *AST, argmap: Map(*Expr), expr: *Expr) ParseError!*Expr {
-	//TODO
+	switch (expr.*){
+		.expr => {
+			const new = ast.mem.create(Expr) catch unreachable;
+			new.* = Expr{
+				.expr = Buffer(*Expr).init(ast.mem.*)
+			};
+			for (expr.expr.items) |item| {
+				new.expr.append(try distribute_args(ast, argmap, item)) catch unreachable;
+			}
+			return new;
+		},
+		.atom => {
+			if (argmap.get(expr.atom.text)) |new| {
+				return new;
+			}
+			return expr;
+		},
+		.quote => {
+			return expr;
+		}
+	}
 }
 
 pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog, env: *Env) ParseError!Expr {
