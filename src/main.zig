@@ -887,7 +887,59 @@ pub fn realias_lambda(ast: *AST, lambda: *Expr, err: *ErrorLog) ParseError!*Expr
 }
 
 pub fn realias_expr(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
+	switch (expr.*){
+		.expr => {
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				expr.expr.items[i] = realias_expr(ast, argmap, expr.expr.items[i]);
+				i += 1;
+			}
+			return expr;
+		},
+		.atom => {
+			if (argmap.get(expr.atom.text)) |replacement| {
+				const new = ast.mem.create(Expr) catch unreachable;
+				new.* = Expr{
+					.atom = expr.atom
+				};
+				new.atom.text = replacement;
+				return new;
+			}
+			return expr;
+		},
+		.quote => {
+			expr.quote = realias_quote(ast, argmap, expr.quote);
+			return expr;
+		}
+	}
+}
 
+pub fn realias_quote(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
+	switch (expr.*){
+		.expr => {
+			if (expr.expr.items.len > 1){
+				if (expr.expr.items[0].* == .atom){
+					if (expr.expr.items[0].atom.tag == UNQUOTE){
+						expr.expr.items[1] = realias_expr(ast, argmap, expr.expr.items[1]);
+						return expr;
+					}
+				}
+			}
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				expr.expr.items[i] = realias_quote(ast, argmap, expr.expr.items[i]);
+				i += 1;
+			}
+			return expr;
+		},
+		.atom => {
+			return expr;
+		},
+		.quote => {
+			expr.quote = realias_quote(ast, argmap, expr.quote);
+			return expr;
+		}
+	}
 }
 
 pub fn binop_type(comptime T: type, op: TOKEN, l: T, r: T) T {
