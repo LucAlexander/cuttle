@@ -753,6 +753,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						return ParseError.UnexpectedToken;
 					},
 					LAMBDA => {
+						if (expr.expr.items.len == 3){
+							return try realias_lambda(ast, expr, err);
+						}
 						return expr;
 					},
 					ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT => {
@@ -858,6 +861,33 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 		}
 	}
 	return expr;
+}
+
+pub fn realias_lambda(ast: *AST, lambda: *Expr, err: *ErrorLog) ParseError!*Expr {
+	var argmap = Map([]u8).init(ast.mem.*);
+	if (lambda.expr.items[1].* == .atom){
+		argmap.put(lambda.expr.items[1].atom.text, uid(ast.mem)) catch unreachable;
+	}
+	else if (lambda.expr.items[1].* == .expr){
+		for (lambda.expr.items[1].expr.items) |arg| {
+			if (arg.* != .atom){
+				err.append(lambda.expr.items[0].atom.pos, "Expected arguments to be atoms\n", .{});
+				return ParseError.UnexpectedToken;
+			}
+			argmap.put(arg.atom.text, uid(ast.mem)) catch unreachable;
+		}
+	}
+	else{
+		err.append(lambda.expr.items[0].atom.pos, "Cannot quote lambda arg\n", .{});
+		return ParseError.UnexpectedToken;
+	}
+	lambda.expr.items[1] = realias_expr(ast, argmap, lambda.expr.items[1]);
+	lambda.expr.items[2] = realias_expr(ast, argmap, lambda.expr.items[2]);
+	return lambda;
+}
+
+pub fn realias_expr(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
+
 }
 
 pub fn binop_type(comptime T: type, op: TOKEN, l: T, r: T) T {
