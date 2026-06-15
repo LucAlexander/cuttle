@@ -756,35 +756,31 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env) ParseError!
 							) catch unreachable;
 							return expr;
 						}
-						//TODO abstract interpretation
-						else if (env.let.contains(expr.expr.items[0].atom.text)) |def| {
-							const term = try metabolize(ast, def, err, env);
-							if (term.* != .expr){
-								return expr;
-							}
-							if (term.expr.items[0].* != .atom){
-								return expr;
-							}
-							if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
-								const right = try metabolize(ast, expr.expr.items[1], err, env);
-								if (right.* == .atom){
-									return try record_access(ast, record, term, right, expr, err, env);
-								}
-							}
-							if (term.expr.items.len != 3){
-								return expr;
-							}
-							if (term.expr.items[0].atom.tag != LAMBDA){
-								return expr;
-							}
-							if (term.expr.items[1].* == .expr){
-								if (term.expr.items[1].expr.items.len > expr.expr.items.len-1){
-									return expr;
-								}
-							}
-							return try metabolize_lambda(ast, expr, err, env);
+						const term = try metabolize(ast, expr.expr.items[0], err, env);
+						if (term.* != .expr){
+							return expr;
 						}
-						return expr;
+						if (term.expr.items[0].* != .atom){
+							return expr;
+						}
+						if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
+							const right = try metabolize(ast, expr.expr.items[1], err, env);
+							if (right.* == .atom){
+								return try record_access(ast, record, term, right, expr, err, env);
+							}
+						}
+						if (term.expr.items.len != 3){
+							return expr;
+						}
+						if (term.expr.items[0].atom.tag != LAMBDA){
+							return expr;
+						}
+						if (term.expr.items[1].* == .expr){
+							if (term.expr.items[1].expr.items.len > expr.expr.items.len-1){
+								return expr;
+							}
+						}
+						return try metabolize_lambda(ast, expr, err, env);
 					}
 				}
 			}
