@@ -1079,6 +1079,34 @@ pub fn distribute_args(ast: *AST, argmap: Map(*Expr), expr: *Expr) ParseError!*E
 			return expr;
 		},
 		.quote => {
+			return try distribute_quote(ast, argmap, expr.quote);
+		}
+	}
+}
+
+pub fn distribute_quote(ast: *AST, argmap: Map(*Expr), expr: *Expr) ParseError!*Expr {
+	switch (expr.*){
+		.expr => {
+			if (expr.expr.items.len > 1){
+				if (expr.expr.items[0].* == .atom){
+					if (expr.expr.items[0].atom.tag == UNQUOTE){
+						expr.expr.items[1] = try distribute_args(ast, argmap, expr.expr.items[1]);
+						return expr;
+					}
+				}
+			}
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				expr.expr.items[i] = try distribute_quote(ast, argmap, expr.expr.items[i]);
+				i += 1;
+			}
+			return expr;
+		},
+		.atom => {
+			return expr;
+		},
+		.quote => {
+			expr.quote = try distribute_quote(ast, argmap, expr.quote);
 			return expr;
 		}
 	}
