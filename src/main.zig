@@ -459,9 +459,12 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 }
 
 pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe) ParseError!*Expr{
-	var it = env.universes.iterator();
-	while (it.next()) |entry| {
-		_ = try metabolize(ast, expr, err, env, entry.value_ptr);
+	if (universe == null){
+		var it = env.universes.iterator();
+		while (it.next()) |entry| {
+			const new = deep_copy(ast.mem, expr);
+			_ = try metabolize(ast, new, err, env, entry.value_ptr);
+		}
 	}
 	switch (expr.*){
 		.expr => {
