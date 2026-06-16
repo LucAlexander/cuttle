@@ -462,8 +462,19 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 	if (universe == null){
 		var it = env.universes.iterator();
 		while (it.next()) |entry| {
-			const new = deep_copy(ast.mem, expr);
-			_ = try metabolize(ast, new, err, env, entry.value_ptr);
+			if (ast.env.getPtr(entry.key_ptr.*)) |_| {}
+			else{
+				ast.env.put(entry.key_ptr.*, Env{
+					.let = Scope.init(ast.mem),
+					.vars = Scope.init(ast.mem),
+					.universes = Map(Universe).init(ast.mem.*),
+					.records = Map(Record).init(ast.mem.*)
+				}) catch unreachable;
+			}
+			if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
+				const new = deep_copy(ast.mem, expr);
+				_ = try metabolize(ast, new, err, exists, entry.value_ptr);
+			}
 		}
 	}
 	switch (expr.*){
@@ -611,7 +622,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 					PROG => {
 						var i: u64 = 0;
 						const frame = env.let.push_frame();
-						const vframe = env.let.push_frame();
+						const vframe = env.vars.push_frame();
 						while (i < expr.expr.items.len){
 							const line = try metabolize(ast, expr.expr.items[i], err, env, universe);
 							expr.expr.items[i] = line;
@@ -671,7 +682,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							const frame = exists.let.push_frame();
 							const vframe = exists.vars.push_frame();
 							while (i < expr.expr.items.len){
-								expr.expr.items[i] = try metabolize(ast, expr.expr.items[i], err, env, null);
+								expr.expr.items[i] = try metabolize(ast, expr.expr.items[i], err, exists, null);
 								i += 1;
 							}
 							exists.let.pop_frame(frame);
@@ -2067,7 +2078,6 @@ pub fn main() anyerror!void {
 //TODO
 // garbage collection again
 // tail call optimiation again
-// lambda arg realiasing again?
 
 // canvas
 // input registry
