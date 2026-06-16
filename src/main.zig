@@ -638,7 +638,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							return ParseError.UnexpectedToken;
 						}
 						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						var i: u64 = 1;
+						var i: u64 = 2;
 						while (i < expr.expr.items.len){
 							const map = try metabolize(ast, expr.expr.items[i], err, env, universe);
 							expr.expr.items[i] = map;
@@ -742,7 +742,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							.expr = Buffer(*Expr).init(ast.mem.*)
 						};
 						var node = expr;
-						while(node.expr.items[0].atom.tag != CONS){
+						while(node.expr.items[0].atom.tag == CONS){
 							tail.expr.append(expr.expr.items[1]) catch unreachable;
 							node = expr.expr.items[2];
 							if (node.* != .expr){
@@ -777,6 +777,8 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[0].atom.pos, "Expected 2 args for binary operand\n", .{});
 							return ParseError.UnexpectedToken;
 						}
+						expr.expr.items[1] = try metabolize(ast, expr.expr.items[1], err, env, universe);
+						expr.expr.items[2] = try metabolize(ast, expr.expr.items[2], err, env, universe);
 						return binop(ast, expr.expr.items[0].atom.tag, expr.expr.items[1], expr.expr.items[2]);
 					},
 					else => {
@@ -1189,7 +1191,7 @@ pub fn distribute_args(ast: *AST, argmap: Map(*Expr), expr: *Expr) ParseError!*E
 			return expr;
 		},
 		.quote => {
-			return try distribute_quote(ast, argmap, expr.quote);
+			return try distribute_quote(ast, argmap, expr);
 		}
 	}
 }
