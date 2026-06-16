@@ -865,6 +865,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 					return try metabolize(ast, def, err, env, null);
 				}
 			}
+			if (env.vars.contains(expr.atom.text)) |def| {
+				return try metabolize(ast, def, err, env, universe);
+			}
 			if (env.let.contains(expr.atom.text)) |def| {
 				return try metabolize(ast, def, err, env, universe);
 			}
@@ -1356,6 +1359,28 @@ pub fn resolve_to_arity(ast: *AST, name: Token, env: *Env) u8 {
 			return 9;
 		},
 		else => {}
+	}
+	if (env.vars.contains(name.text)) |target| {
+		if (target.* == .atom){
+			return resolve_to_arity(ast, target.atom, env);
+		}
+		if (target.* == .expr){
+			if (target.expr.items.len != 0){
+				if (target.expr.items[0].* == .atom){
+					if (target.expr.items[0].atom.tag == LAMBDA){
+						if (target.expr.items.len == 3){
+							if (target.expr.items[1].* == .atom){
+								return 0;
+							}
+							else if (target.expr.items[1].* == .expr){
+								return @truncate(target.expr.items[1].expr.items.len);
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
 	}
 	if (env.let.contains(name.text)) |target| {
 		if (target.* == .atom){
