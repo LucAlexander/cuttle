@@ -789,11 +789,22 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								err.append(expr.expr.items[0].atom.pos, "Expected name for {s}\n", .{expr.expr.items[0].atom.text});
 								return ParseError.UnexpectedToken;
 							}
-							interpretation.lets.put(
-								expr.expr.items[1].atom.text,
-								try metabolize(ast, expr.expr.items[2], err, env, universe)
-							) catch unreachable;
-							return expr;
+							if (ast.env.getPtr(expr.expr.items[0].atom.text)) |_| {}
+							else{
+								ast.env.put(expr.expr.items[0].atom.text, Env{
+									.let = Scope.init(ast.mem),
+									.vars = Scope.init(ast.mem),
+									.universes = Map(Universe).init(ast.mem.*),
+									.records = Map(Record).init(ast.mem.*)
+								}) catch unreachable;
+							}
+							if (ast.env.getPtr(expr.expr.items[0].atom.text)) |exists| {
+								interpretation.lets.put(
+									expr.expr.items[1].atom.text,
+									try metabolize(ast, expr.expr.items[2], err, exists, universe)
+								) catch unreachable;
+								return expr;
+							}
 						}
 						const term = try metabolize(ast, expr.expr.items[0], err, env, universe);
 						expr.expr.items[0] = term;
@@ -2103,6 +2114,7 @@ pub fn main() anyerror!void {
 //TODO
 // garbage collection again
 // tail call optimiation again
+// most universe semantics are inert
 
 // canvas
 // input registry
