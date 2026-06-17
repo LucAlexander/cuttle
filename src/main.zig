@@ -704,7 +704,12 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								}) catch unreachable;
 							}
 							if (ast.env.getPtr(uni.atom.text)) |exists| {
-								return try metabolize(ast, expr.expr.items[2], err, exists, u);
+								const frame = exists.let.push_frame();
+								const vframe = exists.vars.push_frame();
+								const val = try metabolize(ast, expr.expr.items[2], err, exists, u);
+								exists.let.pop_frame(frame);
+								exists.vars.pop_frame(vframe);
+								return val;
 							}
 						}
 						else{
