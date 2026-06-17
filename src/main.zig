@@ -459,46 +459,6 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 }
 
 pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe) ParseError!*Expr{
-	if (universe == null){
-		var it = env.universes.iterator();
-		while (it.next()) |entry| {
-			if (ast.env.getPtr(entry.key_ptr.*)) |_| {}
-			else{
-				ast.env.put(entry.key_ptr.*, Env{
-					.let = Scope.init(ast.mem),
-					.vars = Scope.init(ast.mem),
-					.universes = Map(Universe).init(ast.mem.*),
-					.records = Map(Record).init(ast.mem.*)
-				}) catch unreachable;
-			}
-			if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
-				const frame = exists.let.push_frame();
-				const vframe = exists.vars.push_frame();
-				const new = deep_copy(ast.mem, expr);
-				if (new.* == .atom){
-					if (entry.value_ptr.lets.get(new.atom.text)) |expected| {
-						const real = try metabolize(ast, new, err, exists, entry.value_ptr);
-						const eq = ast.mem.create(Expr) catch unreachable;
-						eq.* = Expr{
-							.expr = Buffer(*Expr).init(ast.mem.*)
-						};
-						const term = ast.mem.create(Expr) catch unreachable;
-						term.* = entry.value_ptr.equality;
-						eq.expr.append(term) catch unreachable;
-						eq.expr.append(expected) catch unreachable;
-						eq.expr.append(real) catch unreachable;
-						_ = try metabolize(ast, eq, err, exists, null);
-						exists.let.pop_frame(frame);
-						exists.vars.pop_frame(vframe);
-						continue;
-					}
-				}
-				_ = try metabolize(ast, new, err, exists, entry.value_ptr);
-				exists.let.pop_frame(frame);
-				exists.vars.pop_frame(vframe);
-			}
-		}
-	}
 	switch (expr.*){
 		.expr => {
 			if (expr.expr.items.len == 0){
@@ -848,6 +808,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								return expr;
 							}
 						}
+						const calling_token = expr.expr.items[0];
 						const term = try metabolize(ast, expr.expr.items[0], err, env, universe);
 						expr.expr.items[0] = term;
 						if (term.* != .expr){
@@ -873,7 +834,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								return expr;
 							}
 						}
-						return try metabolize_lambda(ast, expr, err, env, universe);
+						return try metabolize_lambda(ast, expr, err, env, universe, calling_token);
 					}
 				}
 			}
@@ -906,7 +867,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						return expr;
 					}
 				}
-				return try metabolize_lambda(ast, expr, err, env, universe);
+				return try metabolize_lambda(ast, expr, err, env, universe, null);
 			}
 			else{
 				return expr;
@@ -1217,7 +1178,42 @@ pub fn record_access(ast: *AST, record: *Record, host: *Expr, right: *Expr, oute
 	return ParseError.UnexpectedToken;
 }
 
-pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe) ParseError!*Expr{
+pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, calling_token: ?*Expr) ParseError!*Expr{
+	if (universe == null){
+		if (calling_token) |calling| {
+			var it = env.universes.iterator();
+			while (it.next()) |entry| {
+				if (ast.env.getPtr(entry.key_ptr.*)) |_| {}
+				else{
+					ast.env.put(entry.key_ptr.*, Env{
+						.let = Scope.init(ast.mem),
+						.vars = Scope.init(ast.mem),
+						.universes = Map(Universe).init(ast.mem.*),
+						.records = Map(Record).init(ast.mem.*)
+					}) catch unreachable;
+				}
+				if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
+					const frame = exists.let.push_frame();
+					const vframe = exists.vars.push_frame();
+					const new = deep_copy(ast.mem, expr);
+					const expected = try metabolize(ast, calling, err, exists, entry.value_ptr);
+					const real = try metabolize(ast, new, err, exists, entry.value_ptr);
+					const eq = ast.mem.create(Expr) catch unreachable;
+					eq.* = Expr{
+						.expr = Buffer(*Expr).init(ast.mem.*)
+					};
+					const term = ast.mem.create(Expr) catch unreachable;
+					term.* = entry.value_ptr.equality;
+					eq.expr.append(term) catch unreachable;
+					eq.expr.append(expected) catch unreachable;
+					eq.expr.append(real) catch unreachable;
+					_ = try metabolize(ast, eq, err, exists, null);
+					exists.let.pop_frame(frame);
+					exists.vars.pop_frame(vframe);
+				}
+			}
+		}
+	}
 	var argmap = Map(*Expr).init(ast.mem.*);
 	if (expr.expr.items[0].expr.items[1].* == .atom){
 		const rest = ast.mem.create(Expr) catch unreachable;
@@ -2205,10 +2201,6 @@ pub fn main() anyerror!void {
 // garbage collection again
 // tail call optimiation again
 
-// universe bindings
-// make these happen at calls:
-	// universe equality is wrong
-	// universe fanning is wrong
 // binop universe handling
 // inspecting universe results?
 // let/var are not lambda, capture in thunks is not true closure, is that ok?
