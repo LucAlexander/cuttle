@@ -473,6 +473,22 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 			}
 			if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
 				const new = deep_copy(ast.mem, expr);
+				if (new.* == .atom){
+					if (entry.value_ptr.lets.get(new.atom.text)) |expected| {
+						const real = try metabolize(ast, new, err, exists, entry.value_ptr);
+						const eq = ast.mem.create(Expr) catch unreachable;
+						eq.* = Expr{
+							.expr = Buffer(*Expr).init(ast.mem.*)
+						};
+						const term = ast.mem.create(Expr) catch unreachable;
+						term.* = entry.value_ptr.equality;
+						eq.expr.append(term) catch unreachable;
+						eq.expr.append(expected) catch unreachable;
+						eq.expr.append(real) catch unreachable;
+						_ = try metabolize(ast, eq, err, exists, null);
+						continue;
+					}
+				}
 				_ = try metabolize(ast, new, err, exists, entry.value_ptr);
 			}
 		}
@@ -508,6 +524,10 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								return ParseError.UnexpectedToken;
 							}
 						}
+						env.let.push(
+							expr.expr.items[1].atom.text,
+							expr.expr.items[2]
+						);
 						const value = try metabolize(ast, expr.expr.items[2], err, env, universe);
 						expr.expr.items[2] = value;
 						env.let.push(
@@ -537,6 +557,10 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								return ParseError.UnexpectedToken;
 							}
 						}
+						env.vars.push(
+							expr.expr.items[1].atom.text,
+							expr.expr.items[2]	
+						);
 						const value = try metabolize(ast, expr.expr.items[2], err, env, universe);
 						expr.expr.items[2] = value;
 						env.vars.push(
@@ -803,7 +827,13 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							if (ast.env.getPtr(expr.expr.items[0].atom.text)) |exists| {
 								interpretation.lets.put(
 									expr.expr.items[1].atom.text,
-									try metabolize(ast, expr.expr.items[2], err, exists, universe)
+									expr.expr.items[2]
+								) catch unreachable;
+								const value = try metabolize(ast, expr.expr.items[2], err, exists, universe);
+								expr.expr.items[2] = value;
+								interpretation.lets.put(
+									expr.expr.items[1].atom.text,
+									value
 								) catch unreachable;
 								return expr;
 							}
@@ -2158,9 +2188,7 @@ pub fn main() anyerror!void {
 //TODO
 // garbage collection again
 // tail call optimiation again
-// universe equality semantics are inert
 // recursion in general is unimplemented
-// scope at the call level rather than just at the prog level
 
 // canvas
 // input registry
