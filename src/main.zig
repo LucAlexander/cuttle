@@ -914,6 +914,12 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 		},
 		.atom => {
 			if (universe) |interpretation| {
+				if (env.vars.contains(expr.atom.text)) |value| {
+					return try metabolize(ast, value, err, env, null);
+				}
+				if (env.let.contains(expr.atom.text)) |value| {
+					return try metabolize(ast, value, err, env, null);
+				}
 				var lowered = expr;
 				if (interpretation.lets.get(expr.atom.text)) |def| {
 					lowered = try metabolize(ast, def, err, env, null);
@@ -2199,7 +2205,6 @@ pub fn main() anyerror!void {
 // garbage collection again
 // tail call optimiation again
 
-// env scope default
 // universe bindings
 // make these happen at calls:
 	// universe equality is wrong
