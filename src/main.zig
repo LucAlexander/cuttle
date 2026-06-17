@@ -1180,7 +1180,12 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 		};
 		rest.expr.appendSlice(expr.expr.items[1..]) catch unreachable;
 		argmap.put(expr.expr.items[0].expr.items[1].atom.text, rest) catch unreachable;
-		return try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]);
+		const frame = env.let.push_frame();
+		const vframe = env.vars.push_frame();
+		const rval = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe);
+		env.let.pop_frame(frame);
+		env.vars.pop_frame(vframe);
+		return rval;
 	}
 	for (expr.expr.items[0].expr.items[1].expr.items, expr.expr.items[1..expr.expr.items[0].expr.items[1].expr.items.len+1]) |name, arg| {
 		if (name.* == .atom){
@@ -1191,7 +1196,11 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 			return ParseError.UnexpectedToken;
 		}
 	}
-	const section = try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]);
+	const frame = env.let.push_frame();
+	const vframe = env.vars.push_frame();
+	const section = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe);
+	env.let.pop_frame(frame);
+	env.vars.pop_frame(vframe);
 	if (expr.expr.items[0].expr.items[1].expr.items.len < expr.expr.items.len-1){
 		const new = ast.mem.create(Expr) catch unreachable;
 		new.* = Expr{
@@ -1199,7 +1208,8 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 		};
 		new.expr.append(section) catch unreachable;
 		new.expr.appendSlice(expr.expr.items[expr.expr.items[0].expr.items[1].expr.items.len+1..]) catch unreachable;
-		return try metabolize(ast, new, err, env, universe);
+		const rval = try metabolize(ast, new, err, env, universe);
+		return rval;
 	}
 	return section;
 }
@@ -2148,8 +2158,9 @@ pub fn main() anyerror!void {
 //TODO
 // garbage collection again
 // tail call optimiation again
-// most universe semantics are inert
+// universe equality semantics are inert
 // recursion in general is unimplemented
+// scope at the call level rather than just at the prog level
 
 // canvas
 // input registry
