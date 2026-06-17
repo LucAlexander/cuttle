@@ -874,9 +874,41 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 		},
 		.atom => {
 			if (universe) |interpretation| {
+				var lowered = expr;
 				if (interpretation.lets.get(expr.atom.text)) |def| {
-					return try metabolize(ast, def, err, env, null);
+					lowered = try metabolize(ast, def, err, env, null);
 				}
+				if (lowered.* == .atom){
+					const default = ast.mem.create(Expr) catch unreachable;
+					if (lowered.atom.tag == NAT){
+						default.* = interpretation.nat;
+					}
+					else if (lowered.atom.tag == INT){
+						default.* = interpretation.int;
+					}
+					else if (lowered.atom.tag == FLOAT){
+						default.* = interpretation.float;
+					}
+					else if (lowered.atom.tag == STR){
+						default.* = interpretation.str;
+					}
+					else{
+						default.* = interpretation.all;
+					}
+					return default;
+				}
+				else if (lowered.* == .expr){
+					if (lowered.expr.items.len == 3){
+						if (lowered.expr.items[0].* == .atom){
+							if (lowered.expr.items[0].atom.tag == LAMBDA){
+								const default = ast.mem.create(Expr) catch unreachable;
+								default.* = interpretation.lam;
+								return default;
+							}
+						}
+					}
+				}
+				return expr;
 			}
 			if (env.vars.contains(expr.atom.text)) |def| {
 				return try metabolize(ast, def, err, env, universe);
@@ -2117,6 +2149,7 @@ pub fn main() anyerror!void {
 // garbage collection again
 // tail call optimiation again
 // most universe semantics are inert
+// recursion in general is unimplemented
 
 // canvas
 // input registry
