@@ -41,6 +41,7 @@ const NAT = 14;
 const ERROR = 19;
 const RECORD = 20;
 const CONS = 21;
+const INSPECT = 22;
 
 const Token = struct{
 	text: []const u8,
@@ -175,6 +176,7 @@ pub fn tokenize(mem: *const std.mem.Allocator, text: []const u8) Buffer(Token) {
 	tokmap.put("error", ERROR) catch unreachable;
 	tokmap.put("record", RECORD) catch unreachable;
 	tokmap.put("cons", CONS) catch unreachable;
+	tokmap.put("inspect", INSPECT) catch unreachable;
 	while (i < text.len){
 		const c = text[i];
 		switch(c){
@@ -681,9 +683,28 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						}
 						unreachable;
 					},
+					INSPECT => {
+						if (expr.expr.items.len != 3){
+							err.append(expr.expr.items[0].atom.pos, "Malformed inspect\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						const uni = try metabolize(ast, expr.expr.items[1], err, env, universe);
+						if (uni.* != .atom){
+							err.append(expr.expr.items[0].atom.pos, "Expected universe to inspect value in\n", .{});
+							return ParseError.UnexpectedToken;
+						}
+						if (env.universes.getPtr(uni.atom.text)) |u| {
+							return try metabolize(ast, expr.expr.items[2], err, env, u);
+						}
+						else{
+							err.append(expr.expr.items[0].atom.pos, "No universe defined {s}\n", .{expr.expr.items[1].atom.text});
+							return ParseError.UnexpectedToken;
+						}
+						return expr;
+					},
 					HEAD => {
 						if (expr.expr.items.len != 2){
-							err.append(expr.expr.items[0].atom.pos, "malformed head\n", .{});
+							err.append(expr.expr.items[0].atom.pos, "Malformed head\n", .{});
 							return ParseError.UnexpectedToken;
 						}
 						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe);
@@ -2201,11 +2222,8 @@ pub fn main() anyerror!void {
 // garbage collection again
 // tail call optimiation again
 
-// binop universe handling
-// inspecting universe results?
-// let/var are not lambda, capture in thunks is not true closure, is that ok?
-
 // canvas
 // input registry
 // general way to do syscalls I guess?
 // interactive note environment with vim, let it be a formatter too, things evaluate on save. 
+// string interpolation of expressions
