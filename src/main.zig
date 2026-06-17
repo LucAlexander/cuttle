@@ -472,6 +472,8 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 				}) catch unreachable;
 			}
 			if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
+				const frame = exists.let.push_frame();
+				const vframe = exists.vars.push_frame();
 				const new = deep_copy(ast.mem, expr);
 				if (new.* == .atom){
 					if (entry.value_ptr.lets.get(new.atom.text)) |expected| {
@@ -486,10 +488,14 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						eq.expr.append(expected) catch unreachable;
 						eq.expr.append(real) catch unreachable;
 						_ = try metabolize(ast, eq, err, exists, null);
+						exists.let.pop_frame(frame);
+						exists.vars.pop_frame(vframe);
 						continue;
 					}
 				}
 				_ = try metabolize(ast, new, err, exists, entry.value_ptr);
+				exists.let.pop_frame(frame);
+				exists.vars.pop_frame(vframe);
 			}
 		}
 	}
@@ -565,7 +571,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						expr.expr.items[2] = value;
 						env.vars.push(
 							expr.expr.items[1].atom.text,
-							try metabolize(ast, value, err, env, universe)
+							value
 						);
 						return expr;
 					},
@@ -767,8 +773,8 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						};
 						var node = expr;
 						while(node.expr.items[0].atom.tag == CONS){
-							tail.expr.append(expr.expr.items[1]) catch unreachable;
-							node = expr.expr.items[2];
+							tail.expr.append(node.expr.items[1]) catch unreachable;
+							node = node.expr.items[2];
 							if (node.* != .expr){
 								break;
 							}
@@ -829,7 +835,11 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 									expr.expr.items[1].atom.text,
 									expr.expr.items[2]
 								) catch unreachable;
+								const frame = exists.let.push_frame();
+								const vframe = exists.vars.push_frame();
 								const value = try metabolize(ast, expr.expr.items[2], err, exists, universe);
+								exists.let.pop_frame(frame);
+								exists.vars.pop_frame(vframe);
 								expr.expr.items[2] = value;
 								interpretation.lets.put(
 									expr.expr.items[1].atom.text,
@@ -2188,7 +2198,15 @@ pub fn main() anyerror!void {
 //TODO
 // garbage collection again
 // tail call optimiation again
-// recursion in general is unimplemented
+
+// env scope default
+// universe bindings
+// make these happen at calls:
+	// universe equality is wrong
+	// universe fanning is wrong
+// binop universe handling
+// inspecting universe results?
+// let/var are not lambda, capture in thunks is not true closure, is that ok?
 
 // canvas
 // input registry
