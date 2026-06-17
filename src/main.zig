@@ -1260,11 +1260,15 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 		};
 		rest.expr.appendSlice(expr.expr.items[1..]) catch unreachable;
 		argmap.put(expr.expr.items[0].expr.items[1].atom.text, rest) catch unreachable;
+		const save = checkpoint_from_allocator(ast.mem);
 		const frame = env.let.push_frame();
 		const vframe = env.vars.push_frame();
-		const rval = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe);
+		var rval = deep_copy(ast.tmp, try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe));
 		env.let.pop_frame(frame);
 		env.vars.pop_frame(vframe);
+		restore_from_allocator(ast.mem, save);
+		rval = deep_copy(ast.mem, rval);
+		reset_from_allocator(ast.tmp);
 		return rval;
 	}
 	for (expr.expr.items[0].expr.items[1].expr.items, expr.expr.items[1..expr.expr.items[0].expr.items[1].expr.items.len+1]) |name, arg| {
@@ -1276,11 +1280,15 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 			return ParseError.UnexpectedToken;
 		}
 	}
+	const save = checkpoint_from_allocator(ast.mem);
 	const frame = env.let.push_frame();
 	const vframe = env.vars.push_frame();
-	const section = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe);
+	var section = deep_copy(ast.tmp, try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe));
 	env.let.pop_frame(frame);
 	env.vars.pop_frame(vframe);
+	restore_from_allocator(ast.mem, save);
+	section = deep_copy(ast.mem, section);
+	reset_from_allocator(ast.tmp);
 	if (expr.expr.items[0].expr.items[1].expr.items.len < expr.expr.items.len-1){
 		const new = ast.mem.create(Expr) catch unreachable;
 		new.* = Expr{
@@ -2245,7 +2253,6 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// garbage collection again
 // tail call optimiation again
 
 // canvas
