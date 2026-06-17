@@ -1427,6 +1427,9 @@ pub fn parse_expression(ast: *AST, i: *u64, tokens: []Token, err: *ErrorLog, env
 		UNIVERSE => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 9, env);
 		},
+		INSPECT => {
+			return try parse_sub_expression_arity(ast, i, tokens, err, 2, env);
+		},
 		ERROR => {
 			return try parse_sub_expression_arity(ast, i, tokens, err, 1, env);
 		},
@@ -1470,7 +1473,7 @@ pub fn resolve_to_arity(ast: *AST, name: Token, env: *Env) u8 {
 		ERROR, UNQUOTE, HEAD, TAIL => {
 			return 1;
 		},
-		VAR, SET, LET, COMP, LAMBDA, LT, GT, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
+		INSPECT, VAR, SET, LET, COMP, LAMBDA, LT, GT, ADD, SUB, MUL, DIV, MOD, AND, OR, XOR => {
 			return 2;
 		},
 		UNIVERSE => {
@@ -1697,6 +1700,9 @@ pub fn parse_sub_expression_arity(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				expr.expr.append(definition) catch unreachable;
 				continue;
 			},
+			INSPECT => {
+				return try parse_sub_expression_arity(ast, i, tokens, err, 2, env);
+			},
 			ERROR => {
 				return try parse_sub_expression_arity(ast, i, tokens, err, 1, env);
 			},
@@ -1890,6 +1896,9 @@ pub fn parse_sub_expression_until(ast: *AST, i: *u64, tokens: []Token, err: *Err
 				definition.* = try parse_sub_expression_arity(ast, i, tokens, err, 8, env);
 				expr.expr.append(definition) catch unreachable;
 				continue;
+			},
+			INSPECT => {
+				return try parse_sub_expression_arity(ast, i, tokens, err, 2, env);
 			},
 			ERROR => {
 				return try parse_sub_expression_arity(ast, i, tokens, err, 1, env);
