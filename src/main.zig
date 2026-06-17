@@ -694,7 +694,18 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							return ParseError.UnexpectedToken;
 						}
 						if (env.universes.getPtr(uni.atom.text)) |u| {
-							return try metabolize(ast, expr.expr.items[2], err, env, u);
+							if (ast.env.getPtr(uni.atom.text)) |_| {}
+							else{
+								ast.env.put(uni.atom.text, Env{
+									.let = Scope.init(ast.mem),
+									.vars = Scope.init(ast.mem),
+									.universes = Map(Universe).init(ast.mem.*),
+									.records = Map(Record).init(ast.mem.*)
+								}) catch unreachable;
+							}
+							if (ast.env.getPtr(uni.atom.text)) |exists| {
+								return try metabolize(ast, expr.expr.items[2], err, exists, u);
+							}
 						}
 						else{
 							err.append(expr.expr.items[0].atom.pos, "No universe defined {s}\n", .{expr.expr.items[1].atom.text});
@@ -1214,23 +1225,24 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 					}) catch unreachable;
 				}
 				if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
-					const frame = exists.let.push_frame();
-					const vframe = exists.vars.push_frame();
-					const new = deep_copy(ast.mem, expr);
-					const expected = try metabolize(ast, calling, err, exists, entry.value_ptr);
-					const real = try metabolize(ast, new, err, exists, entry.value_ptr);
-					const eq = ast.mem.create(Expr) catch unreachable;
-					eq.* = Expr{
-						.expr = Buffer(*Expr).init(ast.mem.*)
-					};
-					const term = ast.mem.create(Expr) catch unreachable;
-					term.* = entry.value_ptr.equality;
-					eq.expr.append(term) catch unreachable;
-					eq.expr.append(expected) catch unreachable;
-					eq.expr.append(real) catch unreachable;
-					_ = try metabolize(ast, eq, err, exists, null);
-					exists.let.pop_frame(frame);
-					exists.vars.pop_frame(vframe);
+					if (entry.value_ptr.lets.get(calling.atom.text)) |expected| {
+						const frame = exists.let.push_frame();
+						const vframe = exists.vars.push_frame();
+						const new = deep_copy(ast.mem, expr);
+						const real = try metabolize(ast, new, err, exists, entry.value_ptr);
+						const eq = ast.mem.create(Expr) catch unreachable;
+						eq.* = Expr{
+							.expr = Buffer(*Expr).init(ast.mem.*)
+						};
+						const term = ast.mem.create(Expr) catch unreachable;
+						term.* = entry.value_ptr.equality;
+						eq.expr.append(term) catch unreachable;
+						eq.expr.append(expected) catch unreachable;
+						eq.expr.append(real) catch unreachable;
+						_ = try metabolize(ast, eq, err, exists, null);
+						exists.let.pop_frame(frame);
+						exists.vars.pop_frame(vframe);
+					}
 				}
 			}
 		}
