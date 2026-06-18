@@ -373,7 +373,7 @@ const AST = struct {
 	pub fn write(self: *AST, out: std.fs.File) void {
 		if (self.env.getPtr("_")) |env| {
 			for (self.values.items) |item| {
-				item.write(self, env, out);
+				item.write(self, env, out, 0);
 				out.writer().print("\n\n", .{}) catch unreachable;
 			}
 		}
@@ -396,7 +396,10 @@ const Expr = union(enum){
 	atom: Token,
 	quote: *Expr,
 
-	pub fn write(expr: *Expr, ast: *AST, env: *Env, out: std.fs.File) void {
+	pub fn write(expr: *Expr, ast: *AST, env: *Env, out: std.fs.File, indent: u64) void {
+		for (0..indent) |_| {
+			out.writer().print("\t", .{}) catch unreachable;
+		}
 		switch (expr.*){
 			.expr => {
 				if (expr.expr.items.len == 0){
@@ -407,13 +410,23 @@ const Expr = union(enum){
 					const arity = resolve_to_arity(ast, expr.expr.items[0].atom, env);
 					if (arity != 0){
 						for (expr.expr.items) |item| {
-							item.write(ast, env, out);
+							if (item.* == .expr){
+								out.writer().print("\n", .{}) catch unreachable;
+								item.write(ast, env, out, indent+1);
+								continue;
+							}
+							item.write(ast, env, out, 0);
 						}
 					}
 					else{
 						out.writer().print("(", .{}) catch unreachable;
 						for (expr.expr.items) |item| {
-							item.write(ast, env, out);
+							if (item.* == .expr){
+								out.writer().print("\n", .{}) catch unreachable;
+								item.write(ast, env, out, indent+1);
+								continue;
+							}
+							item.write(ast, env, out, 0);
 						}
 						out.writer().print(")", .{}) catch unreachable;
 					}
@@ -421,7 +434,12 @@ const Expr = union(enum){
 				}
 				out.writer().print("(", .{}) catch unreachable;
 				for (expr.expr.items) |item| {
-					item.write(ast, env, out);
+					if (item.* == .expr){
+						out.writer().print("\n", .{}) catch unreachable;
+						item.write(ast, env, out, indent+1);
+						continue;
+					}
+					item.write(ast, env, out, 0);
 				}
 				out.writer().print(")", .{}) catch unreachable;
 			},
@@ -430,7 +448,7 @@ const Expr = union(enum){
 			},
 			.quote => {
 				out.writer().print("'", .{}) catch unreachable;
-				expr.quote.write(ast, env, out);
+				expr.quote.write(ast, env, out, 0);
 			}
 		}
 	}
@@ -2415,7 +2433,7 @@ pub fn main() anyerror!void {
 			"vim",
 			"-n",
 			"-c", "set autoread",
-			"-c", "set updatetime=250",
+			"-c", "set updatetime=10",
 			"-c", "augroup zig_live_reload | autocmd! | autocmd CursorHold,CursorHoldI,BufEnter,FocusGained * silent! checktime | augroup END",
 			s,
 		};
