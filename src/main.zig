@@ -6,6 +6,7 @@ const debug = true;
 
 const ERROR_MAX = 128;
 const ERROR_LINES = 5;
+const SCOPE_DEPTH = 1024;
 
 const TOKEN = u64;
 
@@ -280,11 +281,13 @@ const Scope = struct {
 	stored_capacity: u64,
 	
 	pub fn init(mem: *const std.mem.Allocator) Scope {
-		return Scope{
+		var scope = Scope{
 			.mem = mem,
 			.lets = Buffer(Map(*Expr)).init(mem.*),
 			.stored_capacity = 0
 		};
+		scope.lets.ensureTotalCapacity(SCOPE_DEPTH) catch unreachable;
+		return scope;
 	}
 
 	pub fn contains(scope: *Scope, key: []const u8) ?*Expr {
@@ -443,6 +446,7 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		.universes = Map(Universe).init(mem.*),
 		.records = Map(Record).init(mem.*),
 	};
+	var starter_trace = Buffer(Token).init(mem.*);
 	ast.env.put("_", default) catch unreachable;
 	if (ast.env.getPtr("_")) |env| {
 		var i: u64 = 0;
@@ -451,8 +455,8 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 		while (i<tokens.len){
 			const top_level = ast.mem.create(Expr) catch unreachable;
 			top_level.* = try parse_expression(&ast, &i, tokens, err, env);
-			const digested = try metabolize(&ast, top_level, err, env, null);
-			ast.values.append(digested) catch unreachable;
+			const digested = try metabolize(&ast, top_level, err, env, null, &starter_trace);
+			ast.values.append(digested.expr) catch unreachable;
 		}
 		env.let.pop_frame(frame);
 		env.vars.pop_frame(vframe);
@@ -460,14 +464,16 @@ pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, token
 	return ast;
 }
 
-pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe) ParseError!*Expr{
+pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, trace: ?*Buffer(Token)) ParseError!ExprTail{
 	switch (expr.*){
 		.expr => {
 			if (expr.expr.items.len == 0){
-				return expr;
+				return ExprTail{
+					.expr = expr
+				};
 			}
 			if (expr.expr.items.len == 1){
-				return try metabolize(ast, expr.expr.items[0], err, env, universe);
+				return try metabolize(ast, expr.expr.items[0], err, env, universe, trace);
 			}
 			if (expr.expr.items[0].* == .atom){
 				switch (expr.expr.items[0].atom.tag){
@@ -496,13 +502,15 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							expr.expr.items[1].atom.text,
 							expr.expr.items[2]
 						);
-						const value = try metabolize(ast, expr.expr.items[2], err, env, universe);
-						expr.expr.items[2] = value;
+						const value = try metabolize(ast, expr.expr.items[2], err, env, universe, null);
+						expr.expr.items[2] = value.expr;
 						env.let.push(
 							expr.expr.items[1].atom.text,
-							value
+							value.expr
 						);
-						return expr;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					VAR => {
 						if (expr.expr.items.len != 3){
@@ -529,13 +537,15 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							expr.expr.items[1].atom.text,
 							expr.expr.items[2]	
 						);
-						const value = try metabolize(ast, expr.expr.items[2], err, env, universe);
-						expr.expr.items[2] = value;
+						const value = try metabolize(ast, expr.expr.items[2], err, env, universe, null);
+						expr.expr.items[2] = value.expr;
 						env.vars.push(
 							expr.expr.items[1].atom.text,
-							value
+							value.expr
 						);
-						return expr;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					SET => {
 						if (expr.expr.items.len != 3){
@@ -548,11 +558,14 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 						}
 						for (env.vars.lets.items) |*frame| {
 							if (frame.getPtr(expr.expr.items[1].atom.text)) |_| {
+								const val = try metabolize(ast, expr.expr.items[2], err, env, universe, null);
 								frame.put(
 									expr.expr.items[1].atom.text,
-									try metabolize(ast, expr.expr.items[2], err, env, universe)
+									val.expr
 								) catch unreachable;
-								return expr;
+								return ExprTail{
+									.expr = expr
+								};
 							}
 						}
 						err.append(expr.expr.items[1].atom.pos, "Binding {s} not found in scope\n", .{expr.expr.items[1].atom.text});
@@ -563,13 +576,13 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[1].atom.pos, "Malformed universe definition\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const name = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (name.* != .atom){
+						const name = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						if (name.expr.* != .atom){
 							err.append(expr.expr.items[1].atom.pos, "Expected atom for universe name\n", .{});
 							return ParseError.UnexpectedToken;
 						}
 						const uni = Universe{
-							.name = name.atom,
+							.name = name.expr.atom,
 							.equality = expr.expr.items[2].*,
 							.int = expr.expr.items[3].*,
 							.nat = expr.expr.items[4].*,
@@ -579,67 +592,82 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							.all = expr.expr.items[8].*,
 							.lets = Map(*Expr).init(ast.mem.*)
 						};
-						env.universes.put(name.atom.text, uni) catch unreachable;
-						return expr;
+						env.universes.put(name.expr.atom.text, uni) catch unreachable;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					RECORD => {
 						if (expr.expr.items.len < 3){
 							err.append(expr.expr.items[0].atom.pos, "Malformed record\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const name = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (name.* != .atom){
+						const name = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						if (name.expr.* != .atom){
 							err.append(expr.expr.items[0].atom.pos, "Expected atom for record name", .{});
 							return ParseError.UnexpectedToken;
 						}
 						var record = Record{
-							.name = name.atom,
+							.name = name.expr.atom,
 							.fields = Buffer(Token).init(ast.mem.*)
 						};
-						const fields = try metabolize(ast, expr.expr.items[2], err, env, universe);
-						if (fields.* != .expr){
+						const fields = try metabolize(ast, expr.expr.items[2], err, env, universe, null);
+						if (fields.expr.* != .expr){
 							err.append(expr.expr.items[1].atom.pos, "Record definition expected to be list of atoms\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						for (fields.expr.items) |field| {
+						for (fields.expr.expr.items) |field| {
 							if (field.* != .atom){
 								err.append(expr.expr.items[1].atom.pos, "Record definition expected to be list of atoms\n", .{});
 								return ParseError.UnexpectedToken;
 							}
 							record.fields.append(field.atom) catch unreachable;
 						}
-						env.records.put(name.atom.text, record) catch unreachable;
-						return expr;
+						env.records.put(name.expr.atom.text, record) catch unreachable;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					PROG => {
 						var i: u64 = 0;
 						const frame = env.let.push_frame();
 						const vframe = env.vars.push_frame();
 						while (i < expr.expr.items.len){
-							const line = try metabolize(ast, expr.expr.items[i], err, env, universe);
-							expr.expr.items[i] = line;
+							if (i == expr.expr.items.len-1){
+								const line = try metabolize(ast, expr.expr.items[i], err, env, universe, trace);
+								if (line == .tail){
+									return line;
+								}
+								expr.expr.items[i] = line.expr;
+								i += 1;
+								continue;
+							}
+							const line = try metabolize(ast, expr.expr.items[i], err, env, universe, null);
+							expr.expr.items[i] = line.expr;
 							i += 1;
 						}
 						env.let.pop_frame(frame);
 						env.vars.pop_frame(vframe);
-						return expr.expr.items[expr.expr.items.len-1];
+						return ExprTail{
+							.expr = expr.expr.items[expr.expr.items.len-1]
+						};
 					},
 					CASE => {
 						if (expr.expr.items.len < 2){
 							err.append(expr.expr.items[0].atom.pos, "Malformed case\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe);
+						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
 						var i: u64 = 2;
 						while (i < expr.expr.items.len){
-							const map = try metabolize(ast, expr.expr.items[i], err, env, universe);
-							expr.expr.items[i] = map;
-							if (map.* != .expr){
+							const map = try metabolize(ast, expr.expr.items[i], err, env, universe, null);
+							expr.expr.items[i] = map.expr;
+							if (map.expr.* != .expr){
 								err.append(expr.expr.items[0].atom.pos, "malformed case mapping\n", .{});
 								return ParseError.UnexpectedToken;
 							}
-							if (structural_eq(map.expr.items[0], arg)){
-								return try metabolize(ast, map.expr.items[1], err, env, universe);
+							if (structural_eq(map.expr.expr.items[0], arg.expr)){
+								return try metabolize(ast, map.expr.expr.items[1], err, env, universe, trace);
 							}
 							i += 1;
 						}
@@ -651,8 +679,8 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[0].atom.pos, "Malformed comp\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const environment = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (environment.* != .atom){
+						const environment = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						if (environment.expr.* != .atom){
 							err.append(expr.expr.items[0].atom.pos, "Expected atom for environment\n", .{});
 							return ParseError.UnexpectedToken;
 						}
@@ -660,26 +688,30 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[0].atom.pos, "Expected program for computation\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						if (ast.env.getPtr(environment.atom.text)) |_| { }
+						if (ast.env.getPtr(environment.expr.atom.text)) |_| { }
 						else{
-							ast.env.put(environment.atom.text, Env{
+							ast.env.put(environment.expr.atom.text, Env{
 								.let = Scope.init(ast.mem),
 								.vars = Scope.init(ast.mem),
 								.universes = Map(Universe).init(ast.mem.*),
 								.records = Map(Record).init(ast.mem.*),
 							}) catch unreachable;
 						}
-						if (ast.env.getPtr(environment.atom.text)) |exists| {
+						if (ast.env.getPtr(environment.expr.atom.text)) |exists| {
 							var i: u64 = 0;
 							const frame = exists.let.push_frame();
 							const vframe = exists.vars.push_frame();
+							var new_trace = Buffer(Token).init(ast.mem.*);
 							while (i < expr.expr.items.len){
-								expr.expr.items[i] = try metabolize(ast, expr.expr.items[i], err, exists, null);
+								const val = try metabolize(ast, expr.expr.items[i], err, exists, null, &new_trace);
+								expr.expr.items[i] = val.expr;
 								i += 1;
 							}
 							exists.let.pop_frame(frame);
 							exists.vars.pop_frame(vframe);
-							return expr.expr.items[expr.expr.items.len-1];
+							return ExprTail{
+								.expr = expr.expr.items[expr.expr.items.len-1]
+							};
 						}
 						unreachable;
 					},
@@ -688,25 +720,26 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[0].atom.pos, "Malformed inspect\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const uni = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (uni.* != .atom){
+						const uni = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						if (uni.expr.* != .atom){
 							err.append(expr.expr.items[0].atom.pos, "Expected universe to inspect value in\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						if (env.universes.getPtr(uni.atom.text)) |u| {
-							if (ast.env.getPtr(uni.atom.text)) |_| {}
+						if (env.universes.getPtr(uni.expr.atom.text)) |u| {
+							if (ast.env.getPtr(uni.expr.atom.text)) |_| {}
 							else{
-								ast.env.put(uni.atom.text, Env{
+								ast.env.put(uni.expr.atom.text, Env{
 									.let = Scope.init(ast.mem),
 									.vars = Scope.init(ast.mem),
 									.universes = Map(Universe).init(ast.mem.*),
-									.records = Map(Record).init(ast.mem.*)
+									.records = Map(Record).init(ast.mem.*),
 								}) catch unreachable;
 							}
-							if (ast.env.getPtr(uni.atom.text)) |exists| {
+							if (ast.env.getPtr(uni.expr.atom.text)) |exists| {
 								const frame = exists.let.push_frame();
 								const vframe = exists.vars.push_frame();
-								const val = try metabolize(ast, expr.expr.items[2], err, exists, u);
+								var new_trace = Buffer(Token).init(ast.mem.*);
+								const val = try metabolize(ast, expr.expr.items[2], err, exists, u, &new_trace);
 								exists.let.pop_frame(frame);
 								exists.vars.pop_frame(vframe);
 								return val;
@@ -716,45 +749,57 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							err.append(expr.expr.items[0].atom.pos, "No universe defined {s}\n", .{expr.expr.items[1].atom.text});
 							return ParseError.UnexpectedToken;
 						}
-						return expr;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					HEAD => {
 						if (expr.expr.items.len != 2){
 							err.append(expr.expr.items[0].atom.pos, "Malformed head\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (arg.* != .expr){
+						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe, trace);
+						if (arg.expr.* != .expr){
 							return arg;
 						}
-						if (arg.expr.items.len == 0){
+						if (arg.expr.expr.items.len == 0){
 							return arg;
 						}
-						return arg.expr.items[0];
+						return ExprTail{
+							.expr = arg.expr.expr.items[0]
+						};
 					},
 					TAIL => {
 						if (expr.expr.items.len != 2){
 							err.append(expr.expr.items[0].atom.pos, "malformed head\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe);
+						const arg = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
 						const tail = ast.mem.create(Expr) catch unreachable;
 						tail.* = Expr{
 							.expr = Buffer(*Expr).init(ast.mem.*)
 						};
-						if (arg.* != .expr){
-							return tail;
+						if (arg.expr.* != .expr){
+							return ExprTail{
+								.expr = tail
+							};
 						}
-						if (arg.expr.items.len == 0){
-							return tail;
+						if (arg.expr.expr.items.len == 0){
+							return ExprTail{
+								.expr = tail
+							};
 						}
-						tail.expr.appendSlice(arg.expr.items[1..]) catch unreachable;
-						return tail;
+						tail.expr.appendSlice(arg.expr.expr.items[1..]) catch unreachable;
+						return ExprTail{
+							.expr = tail
+						};
 					},
 					UNQUOTE => {
-						const quoted = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						if (quoted.* == .quote){
-							return quoted.quote;
+						const quoted = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						if (quoted.expr.* == .quote){
+							return ExprTail{
+								.expr = quoted.expr.quote
+							};
 						}
 						err.append(expr.expr.items[0].atom.pos, "Expected quoted data\n", .{});
 						return ParseError.UnexpectedToken;
@@ -783,7 +828,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							}
 						}
 						tail.expr.append(node) catch unreachable;
-						return tail;
+						return ExprTail{
+							.expr = tail
+						};
 					},
 					ERROR => {
 						if (expr.expr.items.len != 2){
@@ -795,18 +842,26 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 					},
 					LAMBDA => {
 						if (expr.expr.items.len == 3){
-							return try realias_lambda(ast, expr, err);
+							return ExprTail{
+								.expr = try realias_lambda(ast, expr, err)
+							};
 						}
-						return expr;
+						return ExprTail{
+							.expr = expr
+						};
 					},
 					ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, LT, GT => {
 						if (expr.expr.items.len != 3){
 							err.append(expr.expr.items[0].atom.pos, "Expected 2 args for binary operand\n", .{});
 							return ParseError.UnexpectedToken;
 						}
-						expr.expr.items[1] = try metabolize(ast, expr.expr.items[1], err, env, universe);
-						expr.expr.items[2] = try metabolize(ast, expr.expr.items[2], err, env, universe);
-						return binop(ast, expr.expr.items[0].atom.tag, expr.expr.items[1], expr.expr.items[2]);
+						const left = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+						const right = try metabolize(ast, expr.expr.items[2], err, env, universe, null);
+						expr.expr.items[1] = left.expr;
+						expr.expr.items[2] = right.expr;
+						return ExprTail{
+							.expr = try binop(ast, expr.expr.items[0].atom.tag, expr.expr.items[1], expr.expr.items[2])
+						};
 					},
 					else => {
 						if (env.universes.getPtr(expr.expr.items[0].atom.text)) |interpretation| {
@@ -824,7 +879,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 									.let = Scope.init(ast.mem),
 									.vars = Scope.init(ast.mem),
 									.universes = Map(Universe).init(ast.mem.*),
-									.records = Map(Record).init(ast.mem.*)
+									.records = Map(Record).init(ast.mem.*),
 								}) catch unreachable;
 							}
 							if (ast.env.getPtr(expr.expr.items[0].atom.text)) |exists| {
@@ -834,93 +889,84 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								) catch unreachable;
 								const frame = exists.let.push_frame();
 								const vframe = exists.vars.push_frame();
-								const value = try metabolize(ast, expr.expr.items[2], err, exists, universe);
+								var new_trace = Buffer(Token).init(ast.mem.*);
+								const value = try metabolize(ast, expr.expr.items[2], err, exists, universe, &new_trace);
 								exists.let.pop_frame(frame);
 								exists.vars.pop_frame(vframe);
-								expr.expr.items[2] = value;
+								expr.expr.items[2] = value.expr;
 								interpretation.lets.put(
 									expr.expr.items[1].atom.text,
-									value
+									value.expr
 								) catch unreachable;
-								return expr;
+								return ExprTail{
+									.expr = expr
+								};
 							}
 						}
-						const calling_token = expr.expr.items[0];
-						const term = try metabolize(ast, expr.expr.items[0], err, env, universe);
-						expr.expr.items[0] = term;
-						if (term.* != .expr){
-							return expr;
-						}
-						if (term.expr.items[0].* != .atom){
-							return expr;
-						}
-						if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
-							const right = try metabolize(ast, expr.expr.items[1], err, env, universe);
-							if (right.* == .atom){
-								return try record_access(ast, record, term, right, expr, err, env, universe);
-							}
-						}
-						if (term.expr.items.len != 3){
-							return expr;
-						}
-						if (term.expr.items[0].atom.tag != LAMBDA){
-							return expr;
-						}
-						if (term.expr.items[1].* == .expr){
-							if (term.expr.items[1].expr.items.len > expr.expr.items.len-1){
-								return expr;
-							}
-						}
-						return try metabolize_lambda(ast, expr, err, env, universe, calling_token);
+						return try named_call(ast, expr, err, env, universe, trace);
 					}
 				}
 			}
 			else if (expr.expr.items[0].* == .expr){
-				expr.expr.items[0] = try metabolize(ast, expr.expr.items[0], err, env, universe);
+				const val = try metabolize(ast, expr.expr.items[0], err, env, universe, null);
+				expr.expr.items[0] = val.expr;
 				if (expr.expr.items[0].* == .atom){
-					return try metabolize(ast, expr, err, env, universe);
+					return try metabolize(ast, expr, err, env, universe, trace);
 				}
 				const term = expr.expr.items[0];
 				if (term.* != .expr){
-					return expr;
+					return ExprTail{
+						.expr = expr
+					};
 				}
 				if (term.expr.items[0].* != .atom){
-					return expr;
+					return ExprTail{
+						.expr = expr
+					};
 				}
 				if (env.records.getPtr(term.expr.items[0].atom.text)) |record| {
-					const right = try metabolize(ast, expr.expr.items[1], err, env, universe);
-					if (right.* == .atom){
-						return try record_access(ast, record, term, right, expr, err, env, universe);
+					const right = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+					if (right.expr.* == .atom){
+						return try record_access(ast, record, term, right.expr, expr, err, env, universe, trace);
 					}
 				}
 				if (term.expr.items.len != 3){
-					return expr;
+					return ExprTail{
+						.expr = expr
+					};
 				}
 				if (term.expr.items[0].atom.tag != LAMBDA){
-					return expr;
+					return ExprTail{
+						.expr = expr
+					};
 				}
 				if (term.expr.items[1].* == .expr){
 					if (term.expr.items[1].expr.items.len > expr.expr.items.len-1){
-						return expr;
+						return ExprTail{
+							.expr = expr
+						};
 					}
 				}
-				return try metabolize_lambda(ast, expr, err, env, universe, null);
+				return try metabolize_lambda(ast, expr, err, env, universe, null, trace);
 			}
 			else{
-				return expr;
+				return ExprTail{
+					.expr = expr
+				};
 			}
 		},
 		.atom => {
 			if (universe) |interpretation| {
 				if (env.vars.contains(expr.atom.text)) |value| {
-					return try metabolize(ast, value, err, env, null);
+					return try metabolize(ast, value, err, env, null, null);
 				}
 				if (env.let.contains(expr.atom.text)) |value| {
-					return try metabolize(ast, value, err, env, null);
+					return try metabolize(ast, value, err, env, null, null);
 				}
 				var lowered = expr;
 				if (interpretation.lets.get(expr.atom.text)) |def| {
-					lowered = try metabolize(ast, def, err, env, null);
+					const val = try metabolize(ast, def, err, env, null, null);
+					lowered = val.expr;
 				}
 				if (lowered.* == .atom){
 					const default = ast.mem.create(Expr) catch unreachable;
@@ -939,7 +985,9 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 					else{
 						default.* = interpretation.all;
 					}
-					return default;
+					return ExprTail{
+						.expr = default
+					};
 				}
 				else if (lowered.* == .expr){
 					if (lowered.expr.items.len == 3){
@@ -947,26 +995,80 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 							if (lowered.expr.items[0].atom.tag == LAMBDA){
 								const default = ast.mem.create(Expr) catch unreachable;
 								default.* = interpretation.lam;
-								return default;
+								return ExprTail{
+									.expr = default
+								};
 							}
 						}
 					}
 				}
-				return expr;
+				return ExprTail{
+					.expr = expr
+				};
 			}
 			if (env.vars.contains(expr.atom.text)) |def| {
-				return try metabolize(ast, def, err, env, universe);
+				return try metabolize(ast, def, err, env, universe, trace);
 			}
 			if (env.let.contains(expr.atom.text)) |def| {
-				return try metabolize(ast, def, err, env, universe);
+				return try metabolize(ast, def, err, env, universe, trace);
 			}
-			return expr;
+			return ExprTail{
+				.expr = expr
+			};
 		},
 		.quote => {
-			return expr;
+			return ExprTail{
+				.expr = expr
+			};
 		}
 	}
-	return expr;
+	return ExprTail{
+		.expr = expr
+	};
+}
+
+pub fn named_call(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, trace: ?*Buffer(Token)) ParseError!ExprTail {
+	const calling_token = expr.expr.items[0];
+	const term = try metabolize(ast, expr.expr.items[0], err, env, universe, null);
+	expr.expr.items[0] = term.expr;
+	if (term.expr.* != .expr){
+		return ExprTail{
+			.expr = expr
+		};
+	}
+	if (term.expr.expr.items[0].* != .atom){
+		return ExprTail{
+			.expr = expr
+		};
+	}
+	if (env.records.getPtr(term.expr.expr.items[0].atom.text)) |record| {
+		const right = try metabolize(ast, expr.expr.items[1], err, env, universe, null);
+		if (right.expr.* == .atom){
+			return try record_access(ast, record, term.expr, right.expr, expr, err, env, universe, trace);
+		}
+	}
+	if (term.expr.expr.items.len != 3){
+		return ExprTail{
+			.expr = expr
+		};
+	}
+	if (term.expr.expr.items[0].atom.tag != LAMBDA){
+		return ExprTail{
+			.expr = expr
+		};
+	}
+	if (term.expr.expr.items[1].* == .expr){
+		if (term.expr.expr.items[1].expr.items.len > expr.expr.items.len-1){
+			return ExprTail{
+				.expr = expr
+			};
+		}
+	}
+	var tail = try metabolize_lambda(ast, expr, err, env, universe, calling_token, trace);
+	while (tail == .tail){
+		tail = try metabolize_lambda(ast, tail.tail, err, env, universe, calling_token, trace);
+	}
+	return tail;
 }
 
 pub fn realias_lambda(ast: *AST, lambda: *Expr, err: *ErrorLog) ParseError!*Expr {
@@ -1198,7 +1300,7 @@ pub fn binop(ast: *AST, op: TOKEN, left: *Expr, right: *Expr) ParseError!*Expr {
 	return ret;
 }
 
-pub fn record_access(ast: *AST, record: *Record, host: *Expr, right: *Expr, outer: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe) ParseError!*Expr {
+pub fn record_access(ast: *AST, record: *Record, host: *Expr, right: *Expr, outer: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, trace: ?*Buffer(Token)) ParseError!ExprTail {
 	const name = right.atom.text;
 	for (record.fields.items, 1..) |item, i| {
 		if (std.mem.eql(u8, item.text, name)){
@@ -1208,14 +1310,19 @@ pub fn record_access(ast: *AST, record: *Record, host: *Expr, right: *Expr, oute
 			};
 			new.expr.append(host.expr.items[i]) catch unreachable;
 			new.expr.appendSlice(outer.expr.items[2..]) catch unreachable;
-			return try metabolize(ast, new, err, env, universe);
+			return try metabolize(ast, new, err, env, universe, trace);
 		}
 	}
 	err.append(right.atom.pos, "No field {s} in record {s}", .{name, host.expr.items[0].atom.text});
 	return ParseError.UnexpectedToken;
 }
 
-pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, calling_token: ?*Expr) ParseError!*Expr{
+const ExprTail = union(enum){
+	expr: *Expr,
+	tail: *Expr
+};
+
+pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, calling_token: ?*Expr, trace: ?*Buffer(Token)) ParseError!ExprTail{
 	if (universe == null){
 		if (calling_token) |calling| {
 			var it = env.universes.iterator();
@@ -1226,7 +1333,7 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 						.let = Scope.init(ast.mem),
 						.vars = Scope.init(ast.mem),
 						.universes = Map(Universe).init(ast.mem.*),
-						.records = Map(Record).init(ast.mem.*)
+						.records = Map(Record).init(ast.mem.*),
 					}) catch unreachable;
 				}
 				if (ast.env.getPtr(entry.key_ptr.*)) |exists| {
@@ -1234,7 +1341,8 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 						const frame = exists.let.push_frame();
 						const vframe = exists.vars.push_frame();
 						const new = deep_copy(ast.mem, expr);
-						const real = try metabolize(ast, new, err, exists, entry.value_ptr);
+						var new_trace = Buffer(Token).init(ast.mem.*);
+						const real = try metabolize(ast, new, err, exists, entry.value_ptr, &new_trace);
 						const eq = ast.mem.create(Expr) catch unreachable;
 						eq.* = Expr{
 							.expr = Buffer(*Expr).init(ast.mem.*)
@@ -1243,13 +1351,27 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 						term.* = entry.value_ptr.equality;
 						eq.expr.append(term) catch unreachable;
 						eq.expr.append(expected) catch unreachable;
-						eq.expr.append(real) catch unreachable;
-						_ = try metabolize(ast, eq, err, exists, null);
+						eq.expr.append(real.expr) catch unreachable;
+						_ = try metabolize(ast, eq, err, exists, null, null);
 						exists.let.pop_frame(frame);
 						exists.vars.pop_frame(vframe);
 					}
 				}
 			}
+		}
+	}
+	if (trace) |stack_frame| {
+		if (calling_token) |calling| {
+			for (stack_frame.items) |item| {
+				if (std.mem.eql(u8, item.text, calling.atom.text)){
+					return ExprTail{
+						.tail = expr
+					};
+				}
+			}
+		}
+		if (calling_token) |calling| {
+			stack_frame.append(calling.atom) catch unreachable;
 		}
 	}
 	var argmap = Map(*Expr).init(ast.mem.*);
@@ -1263,13 +1385,24 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 		const save = checkpoint_from_allocator(ast.mem);
 		const frame = env.let.push_frame();
 		const vframe = env.vars.push_frame();
-		var rval = deep_copy(ast.tmp, try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe));
+		var rval = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe, trace);
+		if (rval == .tail){
+			return rval;
+		}
+		rval.expr = deep_copy(ast.tmp, rval.expr);
 		env.let.pop_frame(frame);
 		env.vars.pop_frame(vframe);
 		restore_from_allocator(ast.mem, save);
-		rval = deep_copy(ast.mem, rval);
+		const final_val = deep_copy(ast.mem, rval.expr);
 		reset_from_allocator(ast.tmp);
-		return rval;
+		if (trace) |stack_frame| {
+			if (calling_token) |_| {
+				_ = stack_frame.pop();
+			}
+		}
+		return ExprTail{
+			.expr = final_val
+		};
 	}
 	for (expr.expr.items[0].expr.items[1].expr.items, expr.expr.items[1..expr.expr.items[0].expr.items[1].expr.items.len+1]) |name, arg| {
 		if (name.* == .atom){
@@ -1283,23 +1416,39 @@ pub fn metabolize_lambda(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, univ
 	const save = checkpoint_from_allocator(ast.mem);
 	const frame = env.let.push_frame();
 	const vframe = env.vars.push_frame();
-	var section = deep_copy(ast.tmp, try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe));
+	const section = try metabolize(ast, try distribute_args(ast, argmap, expr.expr.items[0].expr.items[2]), err, env, universe, trace);
+	if (section == .tail){
+		return section;
+	}
+	var final_val = deep_copy(ast.tmp, section.expr);
 	env.let.pop_frame(frame);
 	env.vars.pop_frame(vframe);
 	restore_from_allocator(ast.mem, save);
-	section = deep_copy(ast.mem, section);
+	final_val = deep_copy(ast.mem, final_val);
 	reset_from_allocator(ast.tmp);
 	if (expr.expr.items[0].expr.items[1].expr.items.len < expr.expr.items.len-1){
 		const new = ast.mem.create(Expr) catch unreachable;
 		new.* = Expr{
 			.expr = Buffer(*Expr).init(ast.mem.*)
 		};
-		new.expr.append(section) catch unreachable;
+		new.expr.append(final_val) catch unreachable;
 		new.expr.appendSlice(expr.expr.items[expr.expr.items[0].expr.items[1].expr.items.len+1..]) catch unreachable;
-		const rval = try metabolize(ast, new, err, env, universe);
+		const rval = try metabolize(ast, new, err, env, universe, trace);
+		if (trace) |stack_frame| {
+			if (calling_token) |_| {
+				_ = stack_frame.pop();
+			}
+		}
 		return rval;
 	}
-	return section;
+	if (trace) |stack_frame| {
+		if (calling_token) |_| {
+			_ = stack_frame.pop();
+		}
+	}
+	return ExprTail{
+		.expr = final_val 
+	};
 }
 
 pub fn distribute_args(ast: *AST, argmap: Map(*Expr), expr: *Expr) ParseError!*Expr {
@@ -2253,8 +2402,6 @@ pub fn main() anyerror!void {
 }
 
 //TODO
-// tail call optimiation again
-
 // canvas
 // input registry
 // general way to do syscalls I guess?
