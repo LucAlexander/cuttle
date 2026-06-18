@@ -2297,6 +2297,27 @@ pub fn changed(a: PollStamp, b: PollStamp) bool {
     return a.mtime != b.mtime or a.size != b.size;
 }
 
+fn poll_child(child: *std.process.Child) !?std.process.Child.Term {
+    try child.waitForSpawn();
+    if (child.term) |term_or_err| {
+        return try term_or_err;
+    }
+    const res = std.posix.waitpid(child.id, std.posix.W.NOHANG);
+    if (res.pid == 0) return null;
+    const status = res.status;
+    const term: std.process.Child.Term =
+        if (std.posix.W.IFEXITED(status))
+            .{ .Exited = std.posix.W.EXITSTATUS(status) }
+        else if (std.posix.W.IFSIGNALED(status))
+            .{ .Signal = std.posix.W.TERMSIG(status) }
+        else if (std.posix.W.IFSTOPPED(status))
+            .{ .Stopped = std.posix.W.STOPSIG(status) }
+        else
+            .{ .Unknown = status };
+    child.term = term;
+    return try child.wait();
+}
+
 pub fn main() anyerror!void {
 	const heap = std.heap.page_allocator;
 	const main_buffer = heap.alloc(u8, 0x1000000) catch unreachable;
@@ -2346,11 +2367,18 @@ pub fn main() anyerror!void {
 		};
 		ast.write(out);
 		out.close();
-		var vim_argv = [_][]const u8{ "vim", "-n", s};
-		var last_stamp = try get_stamp(s);
+		var vim_argv = [_][]const u8{
+			"vim",
+			"-n",
+			"-c", "set autoread",
+			"-c", "set updatetime=250",
+			"-c", "augroup zig_live_reload | autocmd! | autocmd CursorHold,CursorHoldI,BufEnter,FocusGained * silent! checktime | augroup END",
+			s,
+		};
 		var child = try spawn_vim(main_mem, vim_argv[0..]);
 		defer stop_child(&child) catch {};
 		const poll_interval_ns = 250 * std.time.ns_per_ms;
+		var last_stamp = try get_stamp(s);
 		while (true) {
 			std.time.sleep(poll_interval_ns);
 			const new_stamp = get_stamp(s) catch |e| switch (e) {
@@ -2358,8 +2386,6 @@ pub fn main() anyerror!void {
 				else => return e,
 			};
 			if (changed(last_stamp, new_stamp)) {
-				last_stamp = new_stamp;
-				try stop_child(&child);
 				std.time.sleep(50 * std.time.ns_per_ms);
 				const recontents = try get_contents(&main_mem, s);
 				const retokens = tokenize(&main_mem, recontents);
@@ -2377,7 +2403,14 @@ pub fn main() anyerror!void {
 				};
 				ast.write(out);
 				out.close();
-				child = try spawn_vim(main_mem, vim_argv[0..]);
+				last_stamp = get_stamp(s) catch |e| switch (e) {
+					error.FileNotFound => continue,
+					else => return e,
+				};
+				continue;
+			}
+			if (try poll_child(&child)) |_| {
+				return;
 			}
 		}
 		return;
