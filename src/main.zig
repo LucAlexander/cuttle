@@ -370,8 +370,13 @@ const AST = struct {
 		}
 	}
 
-	pub fn write(_: *AST, out: std.fs.File) void {
-		out.writer().print("(let x 0)\n", .{}) catch unreachable;
+	pub fn write(self: *AST, out: std.fs.File) void {
+		if (self.env.getPtr("_")) |env| {
+			for (self.values.items) |item| {
+				item.write(self, env, out);
+				out.writer().print("\n\n", .{}) catch unreachable;
+			}
+		}
 	}
 };
 
@@ -391,6 +396,45 @@ const Expr = union(enum){
 	atom: Token,
 	quote: *Expr,
 
+	pub fn write(expr: *Expr, ast: *AST, env: *Env, out: std.fs.File) void {
+		switch (expr.*){
+			.expr => {
+				if (expr.expr.items.len == 0){
+					out.writer().print("()", .{}) catch unreachable;
+					return;
+				}
+				if (expr.expr.items[0].* == .atom){
+					const arity = resolve_to_arity(ast, expr.expr.items[0].atom, env);
+					if (arity != 0){
+						for (expr.expr.items) |item| {
+							item.write(ast, env, out);
+						}
+					}
+					else{
+						out.writer().print("(", .{}) catch unreachable;
+						for (expr.expr.items) |item| {
+							item.write(ast, env, out);
+						}
+						out.writer().print(")", .{}) catch unreachable;
+					}
+					return;
+				}
+				out.writer().print("(", .{}) catch unreachable;
+				for (expr.expr.items) |item| {
+					item.write(ast, env, out);
+				}
+				out.writer().print(")", .{}) catch unreachable;
+			},
+			.atom => {
+				out.writer().print("{s} ", .{expr.atom.text}) catch unreachable;
+			},
+			.quote => {
+				out.writer().print("'", .{}) catch unreachable;
+				expr.quote.write(ast, env, out);
+			}
+		}
+	}
+	
 	pub fn depth(self: *Expr) u64  {
 		switch (self.*){
 			.expr => {
