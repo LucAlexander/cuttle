@@ -666,8 +666,18 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 								err.append(expr.expr.items[0].atom.pos, "malformed case mapping\n", .{});
 								return ParseError.UnexpectedToken;
 							}
-							if (structural_eq(map.expr.expr.items[0], arg.expr)){
-								return try metabolize(ast, map.expr.expr.items[1], err, env, universe, trace);
+							var argmap = Map(*Expr).init(ast.mem.*);
+							if (structural_eq(&argmap, map.expr.expr.items[0], arg.expr)){
+								const frame = env.let.push_frame();
+								const vframe = env.vars.push_frame();
+								var it = argmap.iterator();
+								while (it.next()) |entry| {
+									env.let.push(entry.key_ptr.*, entry.value_ptr.*);
+								}
+								const val = try metabolize(ast, map.expr.expr.items[1], err, env, universe, trace);
+								env.let.pop_frame(frame);
+								env.vars.pop_frame(vframe);
+								return val;
 							}
 							i += 1;
 						}
@@ -2163,7 +2173,7 @@ pub fn uid(mem: *const std.mem.Allocator) []u8 {
 	return new;
 }
 
-pub fn structural_eq(left: *Expr, right: *Expr) bool {
+pub fn structural_eq(map: *Map(*Expr), left: *Expr, right: *Expr) bool {
 	switch (left.*){
 		.expr => {
 			if (right.* != .expr){
@@ -2173,26 +2183,22 @@ pub fn structural_eq(left: *Expr, right: *Expr) bool {
 				return false;
 			}
 			for (left.expr.items, right.expr.items) |l, r| {
-				if (!structural_eq(l, r)){
+				if (!structural_eq(map, l, r)){
 					return false;
 				}
 			}
 			return true;
 		},
 		.atom => {
-			if (right.* != .atom){
-				return false;
-			}
-			if (!std.mem.eql(u8, left.atom.text, right.atom.text)){
-				return false;
-			}
+			//TODO literals
+			map.put(left.atom.text, right) catch unreachable;
 			return true;
 		},
 		.quote => {
 			if (right.* != .quote){
 				return false;
 			}
-			return structural_eq(left.quote, right.quote);
+			return structural_eq(map, left.quote, right.quote);
 		}
 	}
 	unreachable;
@@ -2402,6 +2408,8 @@ pub fn main() anyerror!void {
 }
 
 //TODO
+// structural equal needs to be pattern respecting
+
 // canvas
 // input registry
 // general way to do syscalls I guess?
