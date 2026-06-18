@@ -2432,6 +2432,7 @@ pub fn main() anyerror!void {
 		var vim_argv = [_][]const u8{
 			"vim",
 			"-n",
+			"-c", "set filetype=cuttle",
 			"-c", "set autoread",
 			"-c", "set updatetime=10",
 			"-c", "augroup zig_live_reload | autocmd! | autocmd CursorHold,CursorHoldI,BufEnter,FocusGained * silent! checktime | augroup END",
@@ -2497,5 +2498,6 @@ pub fn main() anyerror!void {
 // canvas
 // input registry
 // general way to do syscalls I guess?
-// interactive note environment with vim, let it be a formatter too, things evaluate on save. 
 // string interpolation of expressions
+// uids should look prettier, and should be in a separate memory arena, currently they corrupt entirely
+// binop handling haha
