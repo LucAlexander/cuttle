@@ -407,11 +407,17 @@ const Expr = union(enum){
 					out.writer().print("()", .{}) catch unreachable;
 					return;
 				}
+				if (expr.expr.items.len == 1){
+					if (expr.expr.items[0].* == .expr){
+						expr.expr.items[0].write(ast, env, out, 0);
+						return;
+					}
+				}
 				if (expr.expr.items[0].* == .atom){
 					const arity = resolve_to_arity(ast, expr.expr.items[0].atom, env);
 					if (arity != 0){
 						for (expr.expr.items) |item| {
-							if (item.* == .expr){
+							if (item.* == .expr or item.* == .quote){
 								out.writer().print("\n", .{}) catch unreachable;
 								item.write(ast, env, out, indent+1);
 								continue;
@@ -435,21 +441,23 @@ const Expr = union(enum){
 				}
 				out.writer().print("(", .{}) catch unreachable;
 				for (expr.expr.items) |item| {
-					if (item.* == .expr){
+					if (item.* == .expr or item.* == .quote){
 						out.writer().print("\n", .{}) catch unreachable;
 						item.write(ast, env, out, indent+1);
 						continue;
 					}
 					item.write(ast, env, out, 0);
 				}
-				out.writer().print(")", .{}) catch unreachable;
+				out.writer().print(") ", .{}) catch unreachable;
 			},
 			.atom => {
 				out.writer().print("{s} ", .{expr.atom.text}) catch unreachable;
 			},
 			.quote => {
 				out.writer().print("'", .{}) catch unreachable;
+				out.writer().print("(", .{}) catch unreachable;
 				expr.quote.write(ast, env, out, 0);
+				out.writer().print(") ", .{}) catch unreachable;
 			}
 		}
 	}
