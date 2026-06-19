@@ -360,6 +360,7 @@ const Env = struct {
 const AST = struct {
 	mem: *const std.mem.Allocator,
 	tmp: *const std.mem.Allocator,
+	uids: *const std.mem.Allocator,
 	env: Map(Env),
 	values: Buffer(*Expr),
 
@@ -499,10 +500,11 @@ const ParseError = error {
 	UnexpectedToken
 };
 
-pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
+pub fn parse(mem: *const std.mem.Allocator, tmp: *const std.mem.Allocator, uids: *const std.mem.Allocator, tokens: []Token, err: *ErrorLog) ParseError!AST {
 	var ast = AST{
 		.mem = mem,
 		.tmp = tmp,
+		.uids = uids,
 		.env = Map(Env).init(mem.*),
 		.values = Buffer(*Expr).init(mem.*)
 	};
@@ -1150,7 +1152,7 @@ pub fn named_call(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 pub fn realias_lambda(ast: *AST, lambda: *Expr, err: *ErrorLog) ParseError!*Expr {
 	var argmap = Map([]u8).init(ast.mem.*);
 	if (lambda.expr.items[1].* == .atom){
-		argmap.put(lambda.expr.items[1].atom.text, uid(ast.mem)) catch unreachable;
+		argmap.put(lambda.expr.items[1].atom.text, uid(ast.uids)) catch unreachable;
 	}
 	else if (lambda.expr.items[1].* == .expr){
 		for (lambda.expr.items[1].expr.items) |arg| {
@@ -1158,7 +1160,7 @@ pub fn realias_lambda(ast: *AST, lambda: *Expr, err: *ErrorLog) ParseError!*Expr
 				err.append(lambda.expr.items[0].atom.pos, "Expected arguments to be atoms\n", .{});
 				return ParseError.UnexpectedToken;
 			}
-			argmap.put(arg.atom.text, uid(ast.mem)) catch unreachable;
+			argmap.put(arg.atom.text, uid(ast.uids)) catch unreachable;
 		}
 	}
 	else{
@@ -2211,7 +2213,8 @@ pub fn nearest_token(expr: *Expr) ?Token {
 	return null;
 }
 
-var internal_uid: []const u8 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const initial_uid: []const u8 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+var internal_uid: []const u8 = initial_uid;
 
 pub fn uid(mem: *const std.mem.Allocator) []u8 {
 	var new = mem.alloc(u8, internal_uid.len)
@@ -2386,8 +2389,11 @@ pub fn main() anyerror!void {
 	var main_mem_fixed = std.heap.FixedBufferAllocator.init(main_buffer);
 	var main_mem = main_mem_fixed.allocator();
 	const temp_buffer = heap.alloc(u8, 0x100000) catch unreachable;
+	const uid_buffer = heap.alloc(u8, 0x100000) catch unreachable;
 	var temp_mem_fixed = std.heap.FixedBufferAllocator.init(temp_buffer);
 	var temp_mem = temp_mem_fixed.allocator();
+	var uid_mem_fixed = std.heap.FixedBufferAllocator.init(uid_buffer);
+	var uid_mem = uid_mem_fixed.allocator();
 	const args = try std.process.argsAlloc(main_mem);
 	if (args.len == 1){
 		std.debug.print("-h for help\n", .{});
@@ -2395,9 +2401,9 @@ pub fn main() anyerror!void {
 	}
 	if (std.mem.eql(u8, args[1], "-h")){
 		std.debug.print("Help Menu\n", .{});
-		std.debug.print("   -h : Show this message\n", .{});
-		std.debug.print("   -i : Interactive mode\n", .{});
-		std.debug.print("   [infile name] : interpret file\n", .{});
+		std.debug.print("                 -h : Show this message\n", .{});
+		std.debug.print("   [infile name] -i : Interactive mode\n", .{});
+		std.debug.print("   [infile name]    : interpret file\n", .{});
 		return;
 	}
 	if (args.len < 2){
@@ -2410,25 +2416,12 @@ pub fn main() anyerror!void {
 			return;
 		}
 		const filename = args[1];
-		const contents = try get_contents(&main_mem, filename);
-		const tokens = tokenize(&main_mem, contents);
-		var err = ErrorLog.init(&main_mem);
-		var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
-			err.handle(contents);
-			return;
-		};
-		if (err.log.items.len != 0){
-			err.handle(contents);
-			return;
-		}
-		const buf = ast.mem.alloc(u8, 40) catch unreachable;
+		const buf = main_mem.alloc(u8, 40) catch unreachable;
 		const s = std.fmt.bufPrint(buf, "{s}.live", .{filename}) catch unreachable;
 		var out = std.fs.cwd().createFile(s, .{.truncate=true}) catch {
 			std.debug.print("Error creating file: {s}\n", .{s});
 			return;
 		};
-		ast.write(out);
-		out.close();
 		var vim_argv = [_][]const u8{
 			"vim",
 			"-n",
@@ -2442,6 +2435,21 @@ pub fn main() anyerror!void {
 		defer stop_child(&child) catch {};
 		const poll_interval_ns = 250 * std.time.ns_per_ms;
 		var last_stamp = try get_stamp(s);
+		const frame = checkpoint_from_allocator(&main_mem);
+		const uidframe = checkpoint_from_allocator(&uid_mem);
+		const contents = try get_contents(&main_mem, filename);
+		const tokens = tokenize(&main_mem, contents);
+		var err = ErrorLog.init(&main_mem);
+		var ast = parse(&main_mem, &temp_mem, &uid_mem, tokens.items, &err) catch {
+			err.handle(contents);
+			return;
+		};
+		if (err.log.items.len != 0){
+			err.handle(contents);
+			return;
+		}
+		ast.write(out);
+		out.close();
 		while (true) {
 			std.time.sleep(poll_interval_ns);
 			const new_stamp = get_stamp(s) catch |e| switch (e) {
@@ -2450,9 +2458,14 @@ pub fn main() anyerror!void {
 			};
 			if (changed(last_stamp, new_stamp)) {
 				std.time.sleep(50 * std.time.ns_per_ms);
+				restore_from_allocator(&main_mem, frame);
+				restore_from_allocator(&uid_mem, uidframe);
+				internal_uid = initial_uid;
+				temp_mem_fixed.reset();
 				const recontents = try get_contents(&main_mem, s);
 				const retokens = tokenize(&main_mem, recontents);
-				ast = parse(&main_mem, &temp_mem, retokens.items, &err) catch {
+				err = ErrorLog.init(&main_mem);
+				ast = parse(&main_mem, &temp_mem, &uid_mem, retokens.items, &err) catch {
 					err.handle(recontents);
 					return;
 				};
@@ -2482,7 +2495,7 @@ pub fn main() anyerror!void {
 	const contents = try get_contents(&main_mem, filename);
 	const tokens = tokenize(&main_mem, contents);
 	var err = ErrorLog.init(&main_mem);
-	var ast = parse(&main_mem, &temp_mem, tokens.items, &err) catch {
+	var ast = parse(&main_mem, &temp_mem, &uid_mem, tokens.items, &err) catch {
 		err.handle(contents);
 		return;
 	};
@@ -2495,9 +2508,11 @@ pub fn main() anyerror!void {
 
 //TODO
 
-// canvas
-// input registry
-// general way to do syscalls I guess?
-// string interpolation of expressions
-// uids should look prettier, and should be in a separate memory arena, currently they corrupt entirely
+// greater interactive system
+	// canvas
+	// input registry
+	// general way to do syscalls I guess?
+// string interpolation of expressions (string expr)
+// uids should look prettier
 // binop handling haha
+// use/import accross environments/ files (with env) 
