@@ -1161,11 +1161,6 @@ pub fn metabolize_quote(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, unive
 			};
 		},
 		.quote => {
-			const val = try metabolize_quote(ast, expr.quote, err, env, universe, trace);
-			if (val == .tail){
-				return val;
-			}
-			expr.quote = val.expr;
 			return ExprTail{
 				.expr = expr
 			};
