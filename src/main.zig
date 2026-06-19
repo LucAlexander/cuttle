@@ -1262,7 +1262,35 @@ pub fn realias_expr(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
 			return expr;
 		},
 		.quote => {
-			expr.quote = realias_expr(ast, argmap, expr.quote);
+			expr.quote = realias_quote(ast, argmap, expr.quote);
+			return expr;
+		}
+	}
+}
+
+pub fn realias_quote(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
+	switch (expr.*){
+		.expr => {
+			if (expr.expr.items.len > 1){
+				if (expr.expr.items[0].* == .atom){
+					if (expr.expr.items[0].atom.tag == UNQUOTE){
+						expr.expr.items[1] = realias_expr(ast, argmap, expr.expr.items[1]);
+						return expr;
+					}
+				}
+			}
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				expr.expr.items[i] = realias_quote(ast, argmap, expr.expr.items[i]);
+				i += 1;
+			}
+			return expr;
+		},
+		.atom => {
+			return expr;
+		},
+		.quote => {
+			expr.quote = realias_quote(ast, argmap, expr.quote);
 			return expr;
 		}
 	}
