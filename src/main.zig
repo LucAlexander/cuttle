@@ -921,7 +921,7 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 					LAMBDA => {
 						if (expr.expr.items.len == 3){
 							return ExprTail{
-								.expr = try realias_lambda(ast, expr, err)
+								.expr = try realias_lambda(ast, deep_copy(ast.mem, expr), err)
 							};
 						}
 						return ExprTail{
@@ -1095,6 +1095,11 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 			};
 		},
 		.quote => {
+			const val = try metabolize_quote(ast, expr.quote, err, env, universe, trace);
+			if (val == .tail){
+				return val;
+			}
+			expr.quote = val.expr;
 			return ExprTail{
 				.expr = expr
 			};
@@ -1103,6 +1108,69 @@ pub fn metabolize(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?
 	return ExprTail{
 		.expr = expr
 	};
+}
+
+pub fn metabolize_quote(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, trace: ?*Buffer(Token)) ParseError!ExprTail {
+	switch (expr.*){
+		.expr => {
+			if (expr.expr.items.len > 1){
+				var i: u64 = 0;
+				while (i < expr.expr.items.len){
+					if (expr.expr.items[i].* == .atom){
+						if (expr.expr.items[i].atom.tag == UNQUOTE){
+							if (i < expr.expr.items.len - 1){
+								if (expr.expr.items[i+1].* == .quote){
+									const val = try metabolize(ast, expr.expr.items[i+1].quote, err, env, universe, trace);
+									if (val == .tail){
+										return val;
+									}
+									expr.expr.items[i+1] = val.expr;
+									i += 2;
+									continue;
+								}
+							}
+						}
+					}
+					const val = try metabolize_quote(ast, expr.expr.items[i], err, env, universe, trace);
+					if (val == .tail){
+						return val;
+					}
+					expr.expr.items[i] = val.expr;
+					i += 1;
+				}
+				return ExprTail{
+					.expr = expr
+				};
+			}
+			var i: u64 = 0;
+			while (i < expr.expr.items.len){
+				const val = try metabolize_quote(ast, expr.expr.items[i], err, env, universe, trace);
+				if (val == .tail){
+					return val;
+				}
+				expr.expr.items[i] = val.expr;
+				i += 1;
+			}
+			return ExprTail{
+				.expr = expr
+			};
+		},
+		.atom => {
+			return ExprTail{
+				.expr = expr
+			};
+		},
+		.quote => {
+			const val = try metabolize_quote(ast, expr.quote, err, env, universe, trace);
+			if (val == .tail){
+				return val;
+			}
+			expr.quote = val.expr;
+			return ExprTail{
+				.expr = expr
+			};
+		}
+	}
 }
 
 pub fn named_call(ast: *AST, expr: *Expr, err: *ErrorLog, env: *Env, universe: ?*Universe, trace: ?*Buffer(Token)) ParseError!ExprTail {
@@ -1194,35 +1262,7 @@ pub fn realias_expr(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
 			return expr;
 		},
 		.quote => {
-			expr.quote = realias_quote(ast, argmap, expr.quote);
-			return expr;
-		}
-	}
-}
-
-pub fn realias_quote(ast: *AST, argmap: Map([]u8), expr: *Expr) *Expr {
-	switch (expr.*){
-		.expr => {
-			if (expr.expr.items.len > 1){
-				if (expr.expr.items[0].* == .atom){
-					if (expr.expr.items[0].atom.tag == UNQUOTE){
-						expr.expr.items[1] = realias_expr(ast, argmap, expr.expr.items[1]);
-						return expr;
-					}
-				}
-			}
-			var i: u64 = 0;
-			while (i < expr.expr.items.len){
-				expr.expr.items[i] = realias_quote(ast, argmap, expr.expr.items[i]);
-				i += 1;
-			}
-			return expr;
-		},
-		.atom => {
-			return expr;
-		},
-		.quote => {
-			expr.quote = realias_quote(ast, argmap, expr.quote);
+			expr.quote = realias_expr(ast, argmap, expr.quote);
 			return expr;
 		}
 	}
@@ -2513,6 +2553,6 @@ pub fn main() anyerror!void {
 	// input registry
 	// general way to do syscalls I guess?
 // string interpolation of expressions (string expr)
-// uids should look prettier
+	// string cat (cat a b)
 // binop handling haha
-// use/import accross environments/ files (with env) 
+// use/import across environments/ files (with env) 
