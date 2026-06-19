@@ -2213,7 +2213,7 @@ pub fn nearest_token(expr: *Expr) ?Token {
 	return null;
 }
 
-const initial_uid: []const u8 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const initial_uid: []const u8 = "AAAA-bind";
 var internal_uid: []const u8 = initial_uid;
 
 pub fn uid(mem: *const std.mem.Allocator) []u8 {
